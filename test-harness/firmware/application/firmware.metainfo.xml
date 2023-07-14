@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2023 Miguel Angel Ajo <majopela@redhat.com> -->
+<component type="firmware">
+  <id>org.redhat.jumpstarter.testharness</id>
+  <name>Jumpstarter project test-harness</name>
+  <summary>A test harness device to bring Edge devices into CI</summary>
+  <description>
+    <p>
+	    This firmware takes care of controlling the onboard hardware, like USB
+	    storage routing, leds, power measurement, power control, etc.
+    </p>
+  </description>
+  <provides>
+    <firmware type="flashed">af277716-d895-5da9-af81-37e877c969ec</firmware><!-- USB\VID_2B23&PID_1012 -->
+  </provides>
+  <url type="homepage">https://github.com/redhat-et/jumpstarter</url>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer_name>Red Hat Inc.</developer_name>
+  <releases>
+    <release version="1.0" date="2023-07-14" urgency="medium">
+      <checksum target="content" filename="jumpstarter.bin" />
+      <description>
+        <p>Makes your device work</p>
+      </description>
+    </release>
+  </releases>
+  <tags>
+      <!-- this is consumed by the BKC settings to allow us upgrade/downgrade of firmwares with changing protocols -->
+      <tag>product-protocol-1.0</tag>
+  </tags>
+</component>
