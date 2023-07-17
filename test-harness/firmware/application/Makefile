@@ -20,20 +20,28 @@
 
 TARGET      = jumpstarter
 TARGET_ELF  = target/thumbv7em-none-eabihf/release/jumpstarter
+TARGET_DEBUG_ELF  = target/thumbv7em-none-eabihf/debug/jumpstarter
 VERSION     = 0.01
 
+TARGET_CAB = ${TARGET}-${VERSION}.cab
 
-all: ${TARGET}-$(VERSION).cab
-
-CAB_FILES=							\
+CAB_FILES =					\
 	jumpstarter.bin			\
 	firmware.metainfo.xml
+
+all: $(TARGET_CAB)
 
 check: firmware.metainfo.xml
 	appstream-util validate-relax $<
 
 $(TARGET_ELF): src/main.rs Cargo.toml memory.x
 	cargo build --release
+
+$(TARGET_DEBUG_ELF): src/main.rs Cargo.toml memory.x
+	cargo build
+
+debug: $(TARGET_DEBUG_ELF)
+
 
 jumpstarter.bin: $(TARGET_ELF)
 	arm-none-eabi-objcopy -Obinary $(TARGET_ELF) jumpstarter.bin
@@ -42,25 +50,25 @@ jumpstarter.hex: $(TARGET_ELF)
 	arm-none-eabi-objcopy -Oihex $(TARGET_ELF) jumpstarter.hex
 
 rpmbuild/SOURCES:
-	mkdir -p ./rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+	mkdir -p ./rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS)
 
-rpmbuild/SOURCES/${TARGET}-${VERSION}.cab: rpmbuild/SOURCES ${TARGET}-$(VERSION).cab
-	cp ${TARGET}-${VERSION}.cab rpmbuild/SOURCES
+rpmbuild/SOURCES/$(TARGET_CAB): rpmbuild/SOURCES $(TARGET_CAB)
+	cp $(TARGET_CAB) rpmbuild/SOURCES
 
-rpm: rpmbuild/SOURCES/${TARGET}-${VERSION}.cab jumpstarter-firmware.spec
+rpm: rpmbuild/SOURCES/$(TARGET_CAB) jumpstarter-firmware.spec
 	rpmbuild -bb --define "_topdir $(CURDIR)/rpmbuild" jumpstarter-firmware.spec
 
-srpm: rpmbuild/SOURCES/${TARGET}-${VERSION}.cab jumpstarter-firmware.spec
+srpm: rpmbuild/SOURCES/$(TARGET_CAB) jumpstarter-firmware.spec
 	rpmbuild -bs --define "_topdir $(CURDIR)/rpmbuild" jumpstarter-firmware.spec
 
-${TARGET}-${VERSION}.cab: $(CAB_FILES) check
+$(TARGET_CAB): $(CAB_FILES) check
 	gcab --create --nopath $@ $(CAB_FILES)
 
 copr: clean srpm
 	copr-cli build @redhat-et/jumpstarter rpmbuild/SRPMS/jumpstarter*.src.rpm
 
-
-all: ${TARGET}-${VERSION}.cab
+flash: $(TARGET_CAB)
+	sudo fwupdmgr local-install $(TARGET_CAB) --allow-older
 
 clean:
 	rm -rf target jumpstarter.hex jumpstarter.bin *.cab rpmbuild
