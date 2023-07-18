@@ -257,7 +257,7 @@ fn dfu_init() -> LedType {
     let mut usb_dp = gpioa.pa12.into_push_pull_output();
 
     usb_dp.set_low();
-    cortex_m::asm::delay(1024*10);
+    cortex_m::asm::delay(1024*50);
 
     /* USB Peripheral */
 

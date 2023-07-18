@@ -204,7 +204,7 @@ mod app {
         // Pull the D+ pin down to send a RESET condition to the USB bus.
         let mut usb_dp = gpioa.pa12.into_push_pull_output();
         usb_dp.set_low();
-        cortex_m::asm::delay(1024 * 10);
+        cortex_m::asm::delay(1024 * 50);
 
         let usb_periph = USB {
             usb_global: dp.OTG_FS_GLOBAL,
