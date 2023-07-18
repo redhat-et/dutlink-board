@@ -5,12 +5,14 @@
 use panic_semihosting as _;
 
 mod dfu;
+mod storage;
+mod usbserial;
+mod shell;
 
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
 mod app {
 
-    use core::str;
     use stm32f4xx_hal::{
         gpio,
         gpio::{Input, Output, PushPull},
@@ -25,136 +27,47 @@ mod app {
     use usb_device::{class_prelude::*, prelude::*};
 
     use usbd_serial::SerialPort;
-    use embedded_hal::digital::v2::OutputPin;
-
-    use core::fmt::Write;
-
-    use ushell::{
-        autocomplete::StaticAutocomplete, history::LRUHistory, Input as ushell_input,
-        ShellError as ushell_error, UShell,
-    };
 
     use crate::dfu::{DFUBootloaderRuntime, get_serial_str, new_dfu_bootloader};
+    use crate::storage::*;
+    use crate::usbserial::*;
+    use crate::shell;
 
-    type ShellType = UShell<SerialPort<'static, UsbBusType, BufferStore512, BufferStore512>, StaticAutocomplete<10>, LRUHistory<128, 4>, 128>;
-    const SHELL_PROMPT: &str = "#> ";
-    const CR: &str = "\r\n";
-    const HELP: &str = "\r\n\
-        about                       : print information about this device\r\n\
-        ctl_[a,b,c,d] low|high|hiz  : set CTL_A to low, high or high impedance\r\n\
-        help                        : print this help\r\n\
-        meter [monitor]             : read power consumption, monitor will continue to read until CTRL+C is pressed\r\n\
-        monitor on|off              : enable or disable the serial console monitor in this terminal\r\n\
-        power on|off                : power on or off the DUT\r\n\
-        reset                       : reset the DUT\r\n\
-        send string                 : send string to the DUT\r\n\
-        set a|b|c|d low|high|hiz    : set CTL_A,B,C or D to low, high or high impedance\r\n\
-        ";
-
-    // Device control abstractions
-    pub struct StorageSwitch<OEnPin, SelPin, PwDUTPin, PWHostPin>
-    where
-        OEnPin: OutputPin,
-        SelPin: OutputPin,
-        PwDUTPin: OutputPin,
-        PWHostPin: OutputPin,
-    {
-        usb_store_oen: OEnPin,
-        usb_store_sel: SelPin,
-        usb_pw_dut: PwDUTPin,
-        usb_pw_host: PWHostPin,
-    }
-
-    impl<OEnPin, SelPin, PwDUTPin, PWHostPin> StorageSwitch<OEnPin, SelPin, PwDUTPin, PWHostPin>
-    where
-        OEnPin: OutputPin,
-        SelPin: OutputPin,
-        PwDUTPin: OutputPin,
-        PWHostPin: OutputPin,
-    {
-        fn new(
-            usb_store_oen: OEnPin,
-            usb_store_sel: SelPin,
-            usb_pw_dut: PwDUTPin,
-            usb_pw_host: PWHostPin,
-        ) -> Self {
-            Self {
-                usb_store_oen,
-                usb_store_sel,
-                usb_pw_dut,
-                usb_pw_host,
-            }
-        }
-
-        fn power_off(&mut self) {
-           self.usb_pw_dut.set_low().ok();
-           self.usb_pw_host.set_low().ok();
-           self.usb_store_oen.set_high().ok();
-        }
-
-        fn connect_to_dut(&mut self) {
-            self.usb_pw_host.set_low().ok();
-            self.usb_pw_dut.set_high().ok();
-            self.usb_store_oen.set_low().ok();
-            self.usb_store_sel.set_high().ok();
-        }
-
-        fn connect_to_host(&mut self) {
-            self.usb_pw_dut.set_low().ok();
-            self.usb_pw_host.set_high().ok();
-            self.usb_store_oen.set_low().ok();
-            self.usb_store_sel.set_low().ok();
-        }
-    }
-
-    // Bigger USB Serial buffer
-    use core::borrow::{Borrow, BorrowMut};
-    pub struct BufferStore512([u8; 512]);
-
-    impl Borrow<[u8]> for BufferStore512 {
-        fn borrow(&self) -> &[u8] {
-            &self.0
-        }
-    }
-
-    impl BorrowMut<[u8]> for BufferStore512 {
-        fn borrow_mut(&mut self) -> &mut [u8] {
-            &mut self.0
-        }
-    }
+    type LedCmdType = gpio::PC15<Output<PushPull>>;
+    type PowerEnableType = gpio::PA4<Output<PushPull>>;
+    type StorageSwitchType = StorageSwitch<gpio::PA15<Output<PushPull>>, gpio::PB3<Output<PushPull>>,
+                                           gpio::PB5<Output<PushPull>>, gpio::PB4<Output<PushPull>>>;
 
     // Resources shared between tasks
     #[shared]
     struct Shared {
         timer: timer::CounterMs<pac::TIM2>,
         usb_dev: UsbDevice<'static, UsbBusType>,
-        shell: ShellType,
-        serial2: SerialPort<'static, UsbBusType, BufferStore512, BufferStore512>,
+        shell: shell::ShellType,
+        serial2: USBSerialType,
         usart:  Serial<pac::USART1, (gpio::Pin<'B', 6>, gpio::Pin<'B', 7>)>,
         dfu: DFUBootloaderRuntime,
+
         led_tx: gpio::PC13<Output<PushPull>>,
         led_rx: gpio::PC14<Output<PushPull>>,
-        led_cmd: gpio::PC15<Output<PushPull>>,
-        storage: StorageSwitch<
-            gpio::PA15<Output<PushPull>>,
-            gpio::PB3<Output<PushPull>>,
-            gpio::PB5<Output<PushPull>>,
-            gpio::PB4<Output<PushPull>>>,
-        power_device: gpio::PA4<Output<PushPull>>,
+        led_cmd: LedCmdType,
+
+        storage: StorageSwitchType,
+
+        power_device: PowerEnableType,
     }
 
     // Local resources to specific tasks (cannot be shared)
     #[local]
     struct Local {
         _button: gpio::PA0<Input>,
-        to_dut_serial: Producer<'static, u8, 128>,
-        to_dut_serial_consumer: Consumer<'static, u8, 128>,
+        to_dut_serial: Producer<'static, u8, 128>,          // queue of characters to send to the DUT
+        to_dut_serial_consumer: Consumer<'static, u8, 128>, // consumer side of the queue
     }
 
     #[init(local = [q_to_dut: Queue<u8, 128> = Queue::new()])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
-        static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>,
-        > = None;
+        static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>,> = None;
         static mut EP_MEMORY: [u32; 1024] = [0; 1024];
 
         let dp = ctx.device;
@@ -192,12 +105,12 @@ mod app {
         let pins = (gpiob.pb6, gpiob.pb7);
         let mut usart = Serial::new(
             dp.USART1,
-            pins,
+            pins, // (tx, rx)
             Config::default().baudrate(115_200.bps()).wordlength_8(),
             &clocks,
         ).unwrap().with_u8_data();
+
         usart.listen(Rxne);
-        //usart.listen(Txe);
 
 
         let _current_sense = gpioa.pa1.into_analog();
@@ -220,9 +133,9 @@ mod app {
 
         power_device.set_high();
         
+        // setup a timer for the periodic 100ms task
         let mut timer = dp.TIM2.counter_ms(&clocks);
         timer.start(100.millis()).unwrap();
-        // Set up to generate interrupt when timer expires
         timer.listen(timer::Event::Update);
 
         // Pull the D+ pin down to send a RESET condition to the USB bus.
@@ -242,9 +155,9 @@ mod app {
         unsafe {
             USB_BUS = Some(UsbBus::new(usb_periph, &mut EP_MEMORY));
         }
-        // The USB SerialPorts have 128 byte buffers in each direction by default , so we use new_with_store since we have plenty of RAM.
-        let serial = SerialPort::new_with_store(unsafe { USB_BUS.as_ref().unwrap() }, BufferStore512([0; 512]), BufferStore512([0; 512]));
-        let serial2 = SerialPort::new_with_store(unsafe { USB_BUS.as_ref().unwrap() }, BufferStore512([0; 512]), BufferStore512([0; 512]));
+      
+        let serial1 = new_usb_serial! (unsafe { USB_BUS.as_ref().unwrap() });
+        let serial2 = new_usb_serial! (unsafe { USB_BUS.as_ref().unwrap() });
         let dfu = new_dfu_bootloader(unsafe { USB_BUS.as_ref().unwrap() });
 
         let usb_dev = UsbDeviceBuilder::new(
@@ -260,13 +173,8 @@ mod app {
         .max_packet_size_0(64)
         .build();
 
-         // ushell
-         let autocomplete = StaticAutocomplete(
-            ["help", "power", "storage", "send", "reset", "ctl_a",
-             "ctl_b", "ctl_c", "ctl_d", "status"]);
-         let history = LRUHistory::default();
-         let shell = UShell::new(serial, autocomplete, history);
-
+         let shell = shell::new(serial1);
+        
          let (to_dut_serial, to_dut_serial_consumer) = ctx.local.q_to_dut.split();
         (
             Shared {
@@ -337,77 +245,24 @@ mod app {
         let to_dut_serial = cx.local.to_dut_serial;
 
         (usb_dev, serial2, dfu, shell, led_cmd, storage, powerdev).lock(|usb_dev, serial2, dfu, shell, led_cmd, storage, powerdev| {
-            let s = shell.get_serial_mut();
+            let serial1 = shell.get_serial_mut();
 
-            if !usb_dev.poll(&mut [s, serial2, dfu]) {
+            if !usb_dev.poll(&mut [serial1, serial2, dfu]) {
                 return;
             }
-
-            loop {
-                let result = shell.poll();
-                match result {
-                Ok(Some(ushell_input::Command((cmd, args)))) => {
-                    led_cmd.set_low();
-                    match cmd {
-                            "help" => {
-                                shell.write_str(HELP).ok();
-                            }
-                            "clear" => {
-                                shell.clear().ok();
-                            }
-                            "storage" => {
-                                if args == "dut" {
-                                    storage.connect_to_dut();
-                                    write!(shell, "{0:}storage connected to device under test.{0:}", CR).ok();
-                                } else if args == "host" {
-                                    storage.connect_to_host();
-                                    write!(shell, "{0:}storage connected to host.{0:}", CR).ok();
-                                } else if args == "off" {
-                                    storage.power_off();
-                                    write!(shell, "{0:}storage disconnected.{0:}", CR).ok();
-                                } else {
-                                    write!(shell, "{0:}usage: storage dut|host|off{0:}",CR).ok();
-                                }
-                            }
-                            "power" => {
-                                if args == "on" {
-                                    powerdev.set_high();
-                                    write!(shell, "{0:}device powered on.{0:}", CR).ok();
-                                } else if args == "off" {
-                                    powerdev.set_low();
-                                    write!(shell, "{0:}device powered off.{0:}", CR).ok();
-                                } else {
-                                    write!(shell, "{0:}usage: power on|off{0:}",CR).ok();
-                                }
-                            }
-                            "send" => {   
-                                for c in args.chars() {
-                                    to_dut_serial.enqueue(c as u8).ok();
-                                }
-                                write!(shell, "{0:}sent{0:}",CR).ok();
-                            }
-                            "status" => {
-                               // let on = led_enabled.lock(|e| *e);
-                               // let status = if on { "On" } else { "Off" };
-                               // write!(shell, "{0:}LED: {1:}{0:}", CR, status).ok();
-                               write!(shell, "{0:}status: {0:}", CR).ok();
-                            }
-                            "" => {
-                                shell.write_str(CR).ok();
-                            }
-                            _ => {
-                                write!(shell, "{0:}unsupported command{0:}", CR).ok();
-                            }
-                        }
-                        shell.write_str(SHELL_PROMPT).ok();
-                    
+   
+            let mut send_to_dut = |buf: &[u8]|{
+                for b in buf {
+                    to_dut_serial.enqueue(*b).ok();
                 }
-                Err(ushell_error::WouldBlock) => break,
-                _ => {}
-            }
-        }
+                return
+            };
+
+            shell::handle_shell_commands(shell, led_cmd, storage, powerdev, &mut send_to_dut);
         });
     }
+
+    
 
     #[task(binds = TIM2, shared=[timer, dfu,  led_rx, led_tx, led_cmd])]
     fn timer_expired(mut ctx: timer_expired::Context) {
@@ -425,7 +280,7 @@ mod app {
     // Background task, runs whenever no other tasks are running
     #[idle(local=[to_dut_serial_consumer], shared=[usart, led_tx])]
     fn idle(mut ctx: idle::Context) -> ! {
-
+        // the source of this queue is the send command from the shell
         let to_dut_serial_consumer = &mut ctx.local.to_dut_serial_consumer;
 
         loop {
