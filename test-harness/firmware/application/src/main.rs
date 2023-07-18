@@ -1,7 +1,11 @@
 #![no_std]
 #![no_main]
 
-use panic_halt as _;
+// use panic_halt as _;
+use panic_semihosting as _;
+
+mod dfu;
+
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
 mod app {
@@ -14,13 +18,12 @@ mod app {
         pac,
         prelude::*,
         timer,
-        serial::{config::Config, Event::Rxne, Event::Txe, Serial},
+        serial::{config::Config, Event::Rxne, Serial},
     };
 
     use heapless::spsc::{Consumer, Producer, Queue};
     use usb_device::{class_prelude::*, prelude::*};
 
-    use usbd_dfu_rt::{DfuRuntimeClass, DfuRuntimeOps};
     use usbd_serial::SerialPort;
     use embedded_hal::digital::v2::OutputPin;
 
@@ -31,16 +34,21 @@ mod app {
         ShellError as ushell_error, UShell,
     };
 
-    type ShellType = UShell<SerialPort<'static, UsbBusType>, StaticAutocomplete<10>, LRUHistory<128, 4>, 128>;
+    use crate::dfu::{DFUBootloaderRuntime, get_serial_str, new_dfu_bootloader};
+
+    type ShellType = UShell<SerialPort<'static, UsbBusType, BufferStore512, BufferStore512>, StaticAutocomplete<10>, LRUHistory<128, 4>, 128>;
     const SHELL_PROMPT: &str = "#> ";
     const CR: &str = "\r\n";
-    const HELP: &str = "\r\nhelp: print this help\r\n\
-        storage dut|host|off: switch storage to dut, host or power off\r\n\
-        meter [monitor]: read power consumption, monitor will continue to read until CTRL+C is pressed\r\n\
-        power on|off: power on or off the DUT\r\n\
-        reset: reset the DUT\r\n\
-        send string: send string to the DUT\r\n\
-        ctl_[a,b,c,d] low|high|hiz: set CTL_A to low, high or high impedance\r\n\
+    const HELP: &str = "\r\n\
+        about                       : print information about this device\r\n\
+        ctl_[a,b,c,d] low|high|hiz  : set CTL_A to low, high or high impedance\r\n\
+        help                        : print this help\r\n\
+        meter [monitor]             : read power consumption, monitor will continue to read until CTRL+C is pressed\r\n\
+        monitor on|off              : enable or disable the serial console monitor in this terminal\r\n\
+        power on|off                : power on or off the DUT\r\n\
+        reset                       : reset the DUT\r\n\
+        send string                 : send string to the DUT\r\n\
+        set a|b|c|d low|high|hiz    : set CTL_A,B,C or D to low, high or high impedance\r\n\
         ";
 
     // Device control abstractions
@@ -95,7 +103,23 @@ mod app {
             self.usb_pw_dut.set_low().ok();
             self.usb_pw_host.set_high().ok();
             self.usb_store_oen.set_low().ok();
-            self.usb_store_sel.set_high().ok();
+            self.usb_store_sel.set_low().ok();
+        }
+    }
+
+    // Bigger USB Serial buffer
+    use core::borrow::{Borrow, BorrowMut};
+    pub struct BufferStore512([u8; 512]);
+
+    impl Borrow<[u8]> for BufferStore512 {
+        fn borrow(&self) -> &[u8] {
+            &self.0
+        }
+    }
+
+    impl BorrowMut<[u8]> for BufferStore512 {
+        fn borrow_mut(&mut self) -> &mut [u8] {
+            &mut self.0
         }
     }
 
@@ -105,24 +129,24 @@ mod app {
         timer: timer::CounterMs<pac::TIM2>,
         usb_dev: UsbDevice<'static, UsbBusType>,
         shell: ShellType,
-        serial2: SerialPort<'static, UsbBusType>,
+        serial2: SerialPort<'static, UsbBusType, BufferStore512, BufferStore512>,
         usart:  Serial<pac::USART1, (gpio::Pin<'B', 6>, gpio::Pin<'B', 7>)>,
-        dfu: DfuRuntimeClass<DFUBootloader>,
+        dfu: DFUBootloaderRuntime,
         led_tx: gpio::PC13<Output<PushPull>>,
         led_rx: gpio::PC14<Output<PushPull>>,
         led_cmd: gpio::PC15<Output<PushPull>>,
         storage: StorageSwitch<
             gpio::PA15<Output<PushPull>>,
             gpio::PB3<Output<PushPull>>,
-            gpio::PB4<Output<PushPull>>,
-            gpio::PB5<Output<PushPull>>>,
+            gpio::PB5<Output<PushPull>>,
+            gpio::PB4<Output<PushPull>>>,
         power_device: gpio::PA4<Output<PushPull>>,
     }
 
     // Local resources to specific tasks (cannot be shared)
     #[local]
     struct Local {
-        button: gpio::PA0<Input>,
+        _button: gpio::PA0<Input>,
         to_dut_serial: Producer<'static, u8, 128>,
         to_dut_serial_consumer: Consumer<'static, u8, 128>,
     }
@@ -155,7 +179,7 @@ mod app {
         led_rx.set_high();
         led_cmd.set_high();
         
-        let button = gpioa.pa0.into_pull_up_input();
+        let _button = gpioa.pa0.into_pull_up_input();
         
         let mut ctl_a = gpioa.pa5.into_open_drain_output();
         let mut ctl_b = gpioa.pa6.into_open_drain_output();
@@ -182,8 +206,8 @@ mod app {
         let mut storage = StorageSwitch::new(
             gpioa.pa15.into_push_pull_output(), //OEn
             gpiob.pb3.into_push_pull_output(), //SEL
+            gpiob.pb5.into_push_pull_output(), //PW_DUT
             gpiob.pb4.into_push_pull_output(), //PW_HOST
-            gpiob.pb5.into_push_pull_output() //PW_DUT
         );
 
         storage.power_off();
@@ -218,10 +242,10 @@ mod app {
         unsafe {
             USB_BUS = Some(UsbBus::new(usb_periph, &mut EP_MEMORY));
         }
-
-        let serial = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap() });
-        let serial2 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap() });
-        let dfu = DfuRuntimeClass::new(unsafe { USB_BUS.as_ref().unwrap() }, DFUBootloader);
+        // The USB SerialPorts have 128 byte buffers in each direction by default , so we use new_with_store since we have plenty of RAM.
+        let serial = SerialPort::new_with_store(unsafe { USB_BUS.as_ref().unwrap() }, BufferStore512([0; 512]), BufferStore512([0; 512]));
+        let serial2 = SerialPort::new_with_store(unsafe { USB_BUS.as_ref().unwrap() }, BufferStore512([0; 512]), BufferStore512([0; 512]));
+        let dfu = new_dfu_bootloader(unsafe { USB_BUS.as_ref().unwrap() });
 
         let usb_dev = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap() },
@@ -259,7 +283,7 @@ mod app {
                 power_device
             },
             Local {
-                button,
+                _button,
                 to_dut_serial,
                 to_dut_serial_consumer,  
             },
@@ -294,10 +318,10 @@ mod app {
 
             let serial = shell.get_serial_mut();
             if count > 0 {
-                serial.write(&buf[..count]).unwrap();
+                // we use .ok() instead of unwrap() to ignore the error if the host
+                // isn't reading the usb serial port fast enough and the data overflows
+                serial.write(&buf[..count]).ok();
             }
-           
-    
         });
     }
 
@@ -423,33 +447,10 @@ mod app {
                             
                             if escaped == true {
                                 escaped = false;
-                                match c {
-                                    0x5c => { // \\
-                                        final_c = 0x5c;
-                                    },
-                                    0x6e => { // \n
-                                        final_c = 0x0a;
-                                    },
-                                    0x72 => { // \r
-                                        final_c = 0x0d;
-                                    },
-                                    0x74 => { // \t 
-                                        final_c = 0x09;
-                                    },
-                                    0x61 => { // \a alert
-                                        final_c = 0x07;
-                                    },
-                                    0x62 => { // \b backspace
-                                        final_c = 0x08;
-                                    },
-                                    0x65 => { // \e escape character
-                                        final_c = 0x1b;
-                                    },
-                                    _ => {
-                                        final_c = c;
-                                    }
+                                final_c = match escaped_char(c) {
+                                    Some(c) => c,
+                                    None =>  continue,
                                 }
-                              
                             }
 
                             let usart = &mut ctx.shared.usart;
@@ -476,60 +477,22 @@ mod app {
         }
     }
 
-    pub struct DFUBootloader;
+    fn escaped_char(c:u8) -> Option<u8> {
 
-    const KEY_STAY_IN_BOOT: u32 = 0xb0d42b89;
-
-    impl DfuRuntimeOps for DFUBootloader {
-        const DETACH_TIMEOUT_MS: u16 = 500;
-        const CAN_UPLOAD: bool = false;
-        const WILL_DETACH: bool = true;
-
-        fn detach(&mut self) {
-            cortex_m::interrupt::disable();
-
-            let cortex = unsafe { cortex_m::Peripherals::steal() };
-
-            let p = 0x2000_0000 as *mut u32;
-            unsafe { p.write_volatile(KEY_STAY_IN_BOOT) };
-
-            cortex_m::asm::dsb();
-            unsafe {
-                // System reset request
-                cortex.SCB.aircr.modify(|v| 0x05FA_0004 | (v & 0x700));
-            }
-            cortex_m::asm::dsb();
-            loop {}
+        match c {
+            0x5c => { Some(0x5c) }, // \\
+            0x6e => { Some(0x0a) }, // \n
+            0x72 => { Some(0x0d) }, // \r
+            0x74 => { Some(0x09) }, // \t 
+            0x61 => { Some(0x07) }, // \a alert
+            0x62 => { Some(0x08) }, // \b backspace
+            0x65 => { Some(0x1b) }, // \e escape character
+            0x63 => { Some(0x03) }, // \c // CTRL+C
+            0x64 => { Some(0x04) }, // \d CTRL+D
+            0x77 => { cortex_m::asm::delay(50*1000*1000); None },// \w WAIT DELAY
+            _ => Some(c) 
         }
     }
 
-    /// Returns device serial number as hex string slice.
-    fn get_serial_str() -> &'static str {
-        static mut SERIAL: [u8; 8] = [b' '; 8];
-        let serial = unsafe { SERIAL.as_mut() };
 
-        fn hex(v: u8) -> u8 {
-            match v {
-                0..=9 => v + b'0',
-                0xa..=0xf => v - 0xa + b'a',
-                _ => b' ',
-            }
-        }
-
-        let sn = read_serial();
-
-        for (i, d) in serial.iter_mut().enumerate() {
-            *d = hex(((sn >> (i * 4)) & 0xf) as u8)
-        }
-
-        unsafe { str::from_utf8_unchecked(serial) }
-    }
-
-    /// Return device serial based on U_ID registers.
-    fn read_serial() -> u32 {
-        let u_id0 = 0x1FFF_7A10 as *const u32;
-        let u_id1 = 0x1FFF_7A14 as *const u32;
-
-        unsafe { u_id0.read().wrapping_add(u_id1.read()) }
-    }
 }
