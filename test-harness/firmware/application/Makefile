@@ -34,7 +34,7 @@ all: $(TARGET_CAB)
 check: firmware.metainfo.xml
 	appstream-util validate-relax $<
 
-$(TARGET_ELF): src/main.rs src/*.rs Cargo.toml memory.x
+$(TARGET_ELF): src/*.rs Cargo.toml memory.x
 	cargo build --release
 
 $(TARGET_DEBUG_ELF): src/main.rs Cargo.toml memory.x

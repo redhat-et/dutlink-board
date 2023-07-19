@@ -22,6 +22,7 @@ mod app {
         timer,
         serial::{config::Config, Event::Rxne, Serial},
     };
+    use core::fmt::Write;
 
     use heapless::spsc::{Consumer, Producer, Queue};
     use usb_device::{class_prelude::*, prelude::*};
@@ -157,8 +158,10 @@ mod app {
         }
         /* I tried creating a 2nd serial port which only works on STM32F412 , 411 has not enough
            endpoints, but it didn't work well, the library probably needs some debugging */
-        let serial1 = new_usb_serial! (unsafe { USB_BUS.as_ref().unwrap() });
+        let mut serial1 = new_usb_serial! (unsafe { USB_BUS.as_ref().unwrap() });
         let dfu = new_dfu_bootloader(unsafe { USB_BUS.as_ref().unwrap() });
+
+        serial1.reset();
 
         let usb_dev = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap() },
@@ -205,15 +208,16 @@ mod app {
         )
     }
 
-    #[task(binds = USART1, priority=1, shared = [usart, shell, led_rx])]
+    #[task(binds = USART1, priority=1, shared = [usart, shell, shell_status, led_rx])]
     fn usart_task(cx: usart_task::Context){
         let usart = cx.shared.usart;
         let shell = cx.shared.shell;
+        let shell_status = cx.shared.shell_status;
         let led_rx = cx.shared.led_rx;
 
         let mut buf = [0u8; 64];
         let mut count = 0;
-        (usart, shell, led_rx).lock(|usart, shell, led_rx| {
+        (usart, shell, shell_status, led_rx).lock(|usart, shell, shell_status, led_rx| {
             while usart.is_rx_not_empty() && count<buf.len() {
                 led_rx.set_low();
                 match usart.read() {
@@ -226,17 +230,19 @@ mod app {
                     }
                 }
             }
-
-            let serial = shell.get_serial_mut();
-            if count > 0 {
-                // we use .ok() instead of unwrap() to ignore the error if the host
-                // isn't reading the usb serial port fast enough and the data overflows
-                serial.write(&buf[..count]).ok();
+            // when monitor mode or console mode is enabled, we send all data to the USB serial port
+            if shell_status.console_mode || shell_status.monitor_enabled {
+                let serial = shell.get_serial_mut();
+                if count > 0 {
+                    // we use .ok() instead of unwrap() to ignore the error if the host
+                    // isn't reading the usb serial port fast enough and the data overflows
+                    serial.write(&buf[..count]).ok();
+                }
             }
         });
     }
 
-    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, power_device], local=[to_dut_serial])]
+    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, power_device], local=[esc_cnt:u8 = 0, to_dut_serial])]
     fn usb_task(mut cx: usb_task::Context) {
         let usb_dev = &mut cx.shared.usb_dev;
         let shell = &mut cx.shared.shell;
@@ -246,6 +252,7 @@ mod app {
         let storage = &mut cx.shared.storage;
         let powerdev = &mut cx.shared.power_device;
         let to_dut_serial = cx.local.to_dut_serial;
+        let esc_cnt = cx.local.esc_cnt;
 
         (usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev).lock(|usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev| {
             let serial1 = shell.get_serial_mut();
@@ -253,6 +260,7 @@ mod app {
             if !usb_dev.poll(&mut [serial1, dfu]) {
                 return;
             }
+            let available_to_dut = to_dut_serial.capacity()-to_dut_serial.len();
 
             let mut send_to_dut = |buf: &[u8]|{
                 for b in buf {
@@ -260,7 +268,34 @@ mod app {
                 }
                 return
             };
-            shell::handle_shell_commands(shell, shell_status, led_cmd, storage, powerdev, &mut send_to_dut);
+
+            if shell_status.console_mode {
+                // if in console mode, send all data to the DUT, only read from the USB serial port as much as we can send to the DUT
+                let mut buf = [0u8; 128];
+                match shell.get_serial_mut().read(&mut buf[..available_to_dut]) {
+                    Ok(count) => {
+                        send_to_dut(&buf[..count]);
+
+                        for c in &buf[..count] {
+                            if *c == 0x02 { // CTRL+B
+                                *esc_cnt = *esc_cnt + 1;
+                                if *esc_cnt == 5 {
+                                    shell_status.console_mode = false;
+                                    shell.write_str("\r\nExiting console mode\r\n").ok();
+                                    shell.write_str(shell::SHELL_PROMPT).ok();
+                                    *esc_cnt = 0;
+                                }
+                            } else {
+                                *esc_cnt = 0;
+                            }
+                        }
+                    },
+                    Err(_e) => {
+                    }
+                }
+            } else {
+                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, powerdev, &mut send_to_dut);
+            }
         });
     }
 

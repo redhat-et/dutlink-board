@@ -75,7 +75,10 @@ where
                 if response.len() > 2 {
                     write!(response, "{0:}", CR).ok();
                 }
-                write!(response, "{}", SHELL_PROMPT).ok();
+                // if console mode has been entered we should not print the SHELL PROMPT again
+                if !shell_status.console_mode {
+                    write!(response, "{}", SHELL_PROMPT).ok();
+                }
                 shell.write_str(&response).ok();
 
             }
@@ -169,8 +172,8 @@ where
     B: Write
  {
     if args =="" {
-        shell_status.console_mode = false;
-        write!(response, "Entering console mode, type CTRL+A 5 times to exit").ok();
+        shell_status.console_mode = true;
+        write!(response, "Entering console mode, type CTRL+B 5 times to exit").ok();
     } else {
         write!(response, "usage: console").ok();
     }
