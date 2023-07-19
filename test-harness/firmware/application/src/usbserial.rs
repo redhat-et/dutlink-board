@@ -1,4 +1,3 @@
-
 use stm32f4xx_hal::otg_fs::UsbBusType;
 use usbd_serial::SerialPort;
 
@@ -25,4 +24,4 @@ pub type USBSerialType = SerialPort<'static, UsbBusType, BufferStore512, BufferS
          SerialPort::new_with_store($usb, BufferStore512([0; 512]), BufferStore512([0; 512]))
      };
  }
- pub(crate) use new_usb_serial; 
+ pub(crate) use new_usb_serial;

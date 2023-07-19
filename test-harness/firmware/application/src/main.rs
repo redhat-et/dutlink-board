@@ -44,7 +44,7 @@ mod app {
         timer: timer::CounterMs<pac::TIM2>,
         usb_dev: UsbDevice<'static, UsbBusType>,
         shell: shell::ShellType,
-        serial2: USBSerialType,
+        shell_status: shell::ShellStatus,
         usart:  Serial<pac::USART1, (gpio::Pin<'B', 6>, gpio::Pin<'B', 7>)>,
         dfu: DFUBootloaderRuntime,
 
@@ -83,7 +83,7 @@ mod app {
         let gpioa = dp.GPIOA.split();
         let gpiob = dp.GPIOB.split();
         let gpioc = dp.GPIOC.split();
-        
+
         let mut led_tx = gpioc.pc13.into_push_pull_output();
         let mut led_rx = gpioc.pc14.into_push_pull_output();
         let mut led_cmd = gpioc.pc15.into_push_pull_output();
@@ -91,9 +91,9 @@ mod app {
         led_tx.set_high();
         led_rx.set_high();
         led_cmd.set_high();
-        
+
         let _button = gpioa.pa0.into_pull_up_input();
-        
+
         let mut ctl_a = gpioa.pa5.into_open_drain_output();
         let mut ctl_b = gpioa.pa6.into_open_drain_output();
         let mut ctl_c = gpioa.pa7.into_open_drain_output();
@@ -131,8 +131,8 @@ mod app {
         ctl_c.set_high();
         ctl_d.set_high();
 
-        power_device.set_high();
-        
+        power_device.set_low();
+
         // setup a timer for the periodic 100ms task
         let mut timer = dp.TIM2.counter_ms(&clocks);
         timer.start(100.millis()).unwrap();
@@ -155,9 +155,9 @@ mod app {
         unsafe {
             USB_BUS = Some(UsbBus::new(usb_periph, &mut EP_MEMORY));
         }
-      
+        /* I tried creating a 2nd serial port which only works on STM32F412 , 411 has not enough
+           endpoints, but it didn't work well, the library probably needs some debugging */
         let serial1 = new_usb_serial! (unsafe { USB_BUS.as_ref().unwrap() });
-        let serial2 = new_usb_serial! (unsafe { USB_BUS.as_ref().unwrap() });
         let dfu = new_dfu_bootloader(unsafe { USB_BUS.as_ref().unwrap() });
 
         let usb_dev = UsbDeviceBuilder::new(
@@ -174,14 +174,18 @@ mod app {
         .build();
 
          let shell = shell::new(serial1);
-        
+         let shell_status = shell::ShellStatus{
+             monitor_enabled: false,
+             meter_enabled: false,
+             console_mode: false,};
+
          let (to_dut_serial, to_dut_serial_consumer) = ctx.local.q_to_dut.split();
         (
             Shared {
                 timer,
                 usb_dev,
                 shell,
-                serial2,
+                shell_status,
                 usart,
                 dfu,
                 led_tx,
@@ -193,7 +197,7 @@ mod app {
             Local {
                 _button,
                 to_dut_serial,
-                to_dut_serial_consumer,  
+                to_dut_serial_consumer,
             },
             // Move the monotonic timer to the RTIC run-time, this enables
             // scheduling
@@ -201,16 +205,15 @@ mod app {
         )
     }
 
-    #[task(binds = USART1, priority=1, shared = [usart, shell, led_tx, led_rx])]
+    #[task(binds = USART1, priority=1, shared = [usart, shell, led_rx])]
     fn usart_task(cx: usart_task::Context){
         let usart = cx.shared.usart;
         let shell = cx.shared.shell;
-        let led_tx = cx.shared.led_tx;
         let led_rx = cx.shared.led_rx;
 
         let mut buf = [0u8; 64];
         let mut count = 0;
-        (usart, shell, led_tx, led_rx).lock(|usart, shell, _led_tx, led_rx| {
+        (usart, shell, led_rx).lock(|usart, shell, led_rx| {
             while usart.is_rx_not_empty() && count<buf.len() {
                 led_rx.set_low();
                 match usart.read() {
@@ -233,36 +236,33 @@ mod app {
         });
     }
 
-    #[task(binds = OTG_FS, shared = [usb_dev, serial2, shell, dfu, led_cmd, storage, power_device], local=[to_dut_serial])]
+    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, power_device], local=[to_dut_serial])]
     fn usb_task(mut cx: usb_task::Context) {
         let usb_dev = &mut cx.shared.usb_dev;
-        let serial2 = &mut cx.shared.serial2;
         let shell = &mut cx.shared.shell;
+        let shell_status = &mut cx.shared.shell_status;
         let dfu = &mut cx.shared.dfu;
         let led_cmd = &mut cx.shared.led_cmd;
         let storage = &mut cx.shared.storage;
         let powerdev = &mut cx.shared.power_device;
         let to_dut_serial = cx.local.to_dut_serial;
 
-        (usb_dev, serial2, dfu, shell, led_cmd, storage, powerdev).lock(|usb_dev, serial2, dfu, shell, led_cmd, storage, powerdev| {
+        (usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev).lock(|usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev| {
             let serial1 = shell.get_serial_mut();
 
-            if !usb_dev.poll(&mut [serial1, serial2, dfu]) {
+            if !usb_dev.poll(&mut [serial1, dfu]) {
                 return;
             }
-   
+
             let mut send_to_dut = |buf: &[u8]|{
                 for b in buf {
                     to_dut_serial.enqueue(*b).ok();
                 }
                 return
             };
-
-            shell::handle_shell_commands(shell, led_cmd, storage, powerdev, &mut send_to_dut);
+            shell::handle_shell_commands(shell, shell_status, led_cmd, storage, powerdev, &mut send_to_dut);
         });
     }
-
-    
 
     #[task(binds = TIM2, shared=[timer, dfu,  led_rx, led_tx, led_cmd])]
     fn timer_expired(mut ctx: timer_expired::Context) {
@@ -291,7 +291,6 @@ mod app {
                 continue;
             }
                 loop {
-                    
                     match to_dut_serial_consumer.dequeue() {
                         Some(c) => {
                             let mut final_c:u8 = c;
@@ -299,7 +298,7 @@ mod app {
                                 escaped = true;
                                 continue;
                             }
-                            
+
                             if escaped == true {
                                 escaped = false;
                                 final_c = match escaped_char(c) {
@@ -318,17 +317,14 @@ mod app {
                                         break;
                                     }
                                 }
-                       
                                 usart.write(final_c).ok();
                             });
-                            
                         },
                         None => {
                             break;
                         }
                     }
                 }
-           
         }
     }
 
@@ -338,14 +334,14 @@ mod app {
             0x5c => { Some(0x5c) }, // \\
             0x6e => { Some(0x0a) }, // \n
             0x72 => { Some(0x0d) }, // \r
-            0x74 => { Some(0x09) }, // \t 
+            0x74 => { Some(0x09) }, // \t
             0x61 => { Some(0x07) }, // \a alert
             0x62 => { Some(0x08) }, // \b backspace
             0x65 => { Some(0x1b) }, // \e escape character
             0x63 => { Some(0x03) }, // \c // CTRL+C
             0x64 => { Some(0x04) }, // \d CTRL+D
             0x77 => { cortex_m::asm::delay(50*1000*1000); None },// \w WAIT DELAY
-            _ => Some(c) 
+            _ => Some(c)
         }
     }
 
