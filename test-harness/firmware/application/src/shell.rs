@@ -25,12 +25,13 @@ pub const CR: &str = "\r\n";
 pub const HELP: &str = "\r\n\
         about               : print information about this device\r\n\
         help                : print this help\r\n\
-        meter [monitor]     : read power consumption, monitor will continue to read until CTRL+C is pressed\r\n\
+        meter read|monitor  : read power consumption, monitor will continue to read until CTRL+C is pressed\r\n\
         monitor on|off      : enable or disable the serial console monitor in this terminal\r\n\
         console             : enter into serial console mode, exit with CTRL+A 5 times\r\n\
         power on|off        : power on or off the DUT\r\n\
         send string         : send string to the DUT\r\n\
         set r|a|b|c|d l|h|z : set RESET, CTL_A,B,C or D to low, high or high impedance\r\n\
+        storage dut|host|off: connect storage to DUT, host or disconnect\r\n\
         ";
 
 pub fn new(serial:USBSerialType) -> ShellType {
