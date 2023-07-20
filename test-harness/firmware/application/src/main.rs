@@ -20,7 +20,7 @@ mod app {
         pac,
         prelude::*,
         timer,
-        serial::{config::Config, Event::Rxne, Serial},
+        serial::{config::Config, Tx, Rx, Serial},
     };
     use core::fmt::Write;
 
@@ -39,6 +39,8 @@ mod app {
     type StorageSwitchType = StorageSwitch<gpio::PA15<Output<PushPull>>, gpio::PB3<Output<PushPull>>,
                                            gpio::PB5<Output<PushPull>>, gpio::PB4<Output<PushPull>>>;
 
+
+    const DUT_TX_BUF_SIZE: usize = 1024;
     // Resources shared between tasks
     #[shared]
     struct Shared {
@@ -46,7 +48,6 @@ mod app {
         usb_dev: UsbDevice<'static, UsbBusType>,
         shell: shell::ShellType,
         shell_status: shell::ShellStatus,
-        usart:  Serial<pac::USART1, (gpio::Pin<'B', 6>, gpio::Pin<'B', 7>)>,
         dfu: DFUBootloaderRuntime,
 
         led_tx: gpio::PC13<Output<PushPull>>,
@@ -62,11 +63,13 @@ mod app {
     #[local]
     struct Local {
         _button: gpio::PA0<Input>,
-        to_dut_serial: Producer<'static, u8, 128>,          // queue of characters to send to the DUT
-        to_dut_serial_consumer: Consumer<'static, u8, 128>, // consumer side of the queue
+        usart_rx: Rx<pac::USART1>,
+        usart_tx: Tx<pac::USART1>,
+        to_dut_serial: Producer<'static, u8, DUT_TX_BUF_SIZE>,          // queue of characters to send to the DUT
+        to_dut_serial_consumer: Consumer<'static, u8, DUT_TX_BUF_SIZE>, // consumer side of the queue
     }
 
-    #[init(local = [q_to_dut: Queue<u8, 128> = Queue::new()])]
+    #[init(local = [q_to_dut: Queue<u8, DUT_TX_BUF_SIZE> = Queue::new()])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>,> = None;
         static mut EP_MEMORY: [u32; 1024] = [0; 1024];
@@ -104,14 +107,16 @@ mod app {
         let mut power_device = gpioa.pa4.into_push_pull_output();
 
         let pins = (gpiob.pb6, gpiob.pb7);
-        let mut usart = Serial::new(
+        let usart = Serial::new(
             dp.USART1,
             pins, // (tx, rx)
             Config::default().baudrate(115_200.bps()).wordlength_8(),
             &clocks,
         ).unwrap().with_u8_data();
 
-        usart.listen(Rxne);
+        let (usart_tx, mut usart_rx) = usart.split();
+
+        usart_rx.listen();
 
 
         let _current_sense = gpioa.pa1.into_analog();
@@ -189,7 +194,6 @@ mod app {
                 usb_dev,
                 shell,
                 shell_status,
-                usart,
                 dfu,
                 led_tx,
                 led_rx,
@@ -199,6 +203,8 @@ mod app {
             },
             Local {
                 _button,
+                usart_tx,
+                usart_rx,
                 to_dut_serial,
                 to_dut_serial_consumer,
             },
@@ -208,19 +214,19 @@ mod app {
         )
     }
 
-    #[task(binds = USART1, priority=1, shared = [usart, shell, shell_status, led_rx])]
+    #[task(binds = USART1, priority=1, local = [usart_rx], shared = [shell, shell_status, led_rx])]
     fn usart_task(cx: usart_task::Context){
-        let usart = cx.shared.usart;
+        let usart_rx = cx.local.usart_rx;
         let shell = cx.shared.shell;
         let shell_status = cx.shared.shell_status;
         let led_rx = cx.shared.led_rx;
 
         let mut buf = [0u8; 64];
         let mut count = 0;
-        (usart, shell, shell_status, led_rx).lock(|usart, shell, shell_status, led_rx| {
-            while usart.is_rx_not_empty() && count<buf.len() {
+        (shell, shell_status, led_rx).lock(|shell, shell_status, led_rx| {
+            while usart_rx.is_rx_not_empty() && count<buf.len() {
                 led_rx.set_low();
-                match usart.read() {
+                match usart_rx.read() {
                     Ok(b) => {
                         buf[count] = b;
                         count += 1;
@@ -271,8 +277,8 @@ mod app {
 
             if shell_status.console_mode {
                 // if in console mode, send all data to the DUT, only read from the USB serial port as much as we can send to the DUT
-                let mut buf = [0u8; 128];
-                match shell.get_serial_mut().read(&mut buf[..available_to_dut]) {
+                let mut buf = [0u8; DUT_TX_BUF_SIZE];
+                match serial1.read(&mut buf[..available_to_dut]) {
                     Ok(count) => {
                         send_to_dut(&buf[..count]);
 
@@ -303,6 +309,7 @@ mod app {
     fn timer_expired(mut ctx: timer_expired::Context) {
 
         ctx.shared.dfu.lock(|dfu| dfu.tick(100));
+
         // clear all leds set in other tasts
         ctx.shared.led_rx.lock(|led_rx| led_rx.set_high());
         ctx.shared.led_tx.lock(|led_tx| led_tx.set_high());
@@ -313,22 +320,31 @@ mod app {
     }
 
     // Background task, runs whenever no other tasks are running
-    #[idle(local=[to_dut_serial_consumer], shared=[usart, led_tx])]
+    #[idle(local=[to_dut_serial_consumer, usart_tx], shared=[led_tx, shell_status])]
     fn idle(mut ctx: idle::Context) -> ! {
         // the source of this queue is the send command from the shell
         let to_dut_serial_consumer = &mut ctx.local.to_dut_serial_consumer;
+        let shell_status = &mut ctx.shared.shell_status;
 
         loop {
             // Go to sleep, wake up on interrupt
             let mut escaped = false;
             cortex_m::asm::wfi();
+
+            // Is there any data to be sent to the device under test over USART?
             if to_dut_serial_consumer.len() == 0 {
                 continue;
             }
-                loop {
-                    match to_dut_serial_consumer.dequeue() {
-                        Some(c) => {
-                            let mut final_c:u8 = c;
+            let should_escape = shell_status.lock(|shell_status| !shell_status.console_mode);
+            loop {
+                match to_dut_serial_consumer.dequeue() {
+                    Some(c) => {
+                        // in console mode we should not handle escape characters.
+                        // this would be arguably better implemented in the shell send function
+                        // but this allows for the \w wait command to delay and not block other
+                        // tasts
+                        let mut final_c:u8 = c;
+                        if should_escape {
                             if escaped == false && c == 0x5c { // backslash
                                 escaped = true;
                                 continue;
@@ -341,25 +357,26 @@ mod app {
                                     None =>  continue,
                                 }
                             }
-
-                            let usart = &mut ctx.shared.usart;
-                            let led_tx = &mut ctx.shared.led_tx;
-                            (usart, led_tx).lock(|usart, led_tx| {
-                                led_tx.set_low();
-                                loop { // Meeehh, move to a separate task ,listeing to TxISR, this will block
-                                       // other tasts from running
-                                    if usart.is_tx_empty() {
-                                        break;
-                                    }
-                                }
-                                usart.write(final_c).ok();
-                            });
-                        },
-                        None => {
-                            break;
                         }
+
+                        let usart_tx = &mut ctx.local.usart_tx;
+                        let led_tx = &mut ctx.shared.led_tx;
+                        led_tx.lock(|led_tx| led_tx.set_low());
+
+                        loop {
+                            if usart_tx.is_tx_empty() {
+                                    break;
+                            }
+                        }
+
+                        usart_tx.write(final_c).ok();
+
+                    },
+                    None => {
+                        break;
                     }
                 }
+            }
         }
     }
 

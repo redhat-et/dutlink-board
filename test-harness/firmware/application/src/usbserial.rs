@@ -6,7 +6,7 @@ pub type USBSerialType = SerialPort<'static, UsbBusType, BufferStore, BufferStor
  // Bigger USB Serial buffer
  use core::borrow::{Borrow, BorrowMut};
 
-pub const BUFFER_SIZE:usize = 512;
+pub const BUFFER_SIZE:usize = 1024;
  pub struct BufferStore(pub [u8; BUFFER_SIZE]);
 
  impl Borrow<[u8]> for BufferStore {
