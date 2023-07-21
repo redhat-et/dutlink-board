@@ -4,7 +4,8 @@ use core::fmt::Write;
 
 use arrayvec::ArrayString;
 
-use crate::usbserial::*;
+use crate::ctlpins::PinState;
+use crate::{usbserial::*, ctlpins::CTLPins};
 use crate::storage::StorageSwitchTrait;
 use ushell::{
     autocomplete::StaticAutocomplete, history::LRUHistory, Input as ushell_input,
@@ -41,7 +42,7 @@ pub fn new(serial:USBSerialType) -> ShellType {
     shell
 }
 
-pub fn handle_shell_commands<L, S, P>(shell: &mut ShellType, shell_status: &mut ShellStatus, led_cmd: &mut L, storage: &mut S, powerdev: &mut P, send_to_dut: &mut dyn FnMut(&[u8])) 
+pub fn handle_shell_commands<L, S, P>(shell: &mut ShellType, shell_status: &mut ShellStatus, led_cmd: &mut L, storage: &mut S, powerdev: &mut P, ctl_pins:&mut CTLPins, send_to_dut: &mut dyn FnMut(&[u8])) 
 where
     L: OutputPin,
     S: StorageSwitchTrait,
@@ -65,7 +66,7 @@ where
                         "storage" => { handle_storage_cmd(&mut response, args, storage); }
                         "power" =>   { handle_power_cmd(&mut response, args, powerdev); }
                         "send" =>    { handle_send_cmd(&mut response, args, send_to_dut); }
-                        "set" =>     { handle_set_cmd(&mut response, args); }
+                        "set" =>     { handle_set_cmd(&mut response, args, ctl_pins); }
                         "status" =>  { handle_status_cmd(&mut response, args, shell_status); }
                         "" => {}
                         _ => {
@@ -180,7 +181,7 @@ where
     }
 }
 
-fn handle_set_cmd<B>(response:&mut B, args: &str)
+fn handle_set_cmd<B>(response:&mut B, args: &str, ctl_pins:&mut CTLPins)
 where
     B: Write
 
@@ -218,7 +219,23 @@ where
             _ => "",
         };
 
-        write!(response, "Setting {} to {}", ctl_str, val_str).ok();
+        let ps = match val {
+            'l' => PinState::Low,
+            'h' => PinState::High,
+            'z' => PinState::Floating,
+            _ => PinState::Floating,
+        };
+
+        match ctl {
+            'r' => ctl_pins.set_reset(ps),
+            'a' => ctl_pins.set_ctl_a(ps),
+            'b' => ctl_pins.set_ctl_b(ps),
+            'c' => ctl_pins.set_ctl_c(ps),
+            'd' => ctl_pins.set_ctl_d(ps),
+            _ => {},
+        };
+
+        write!(response, "Set {} to {}", ctl_str, val_str).ok();
     } else {
         write_set_usage(response)
     }

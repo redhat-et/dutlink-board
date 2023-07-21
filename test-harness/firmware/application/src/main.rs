@@ -8,6 +8,7 @@ mod dfu;
 mod storage;
 mod usbserial;
 mod shell;
+mod ctlpins;
 
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
@@ -36,6 +37,7 @@ mod app {
     use crate::storage::*;
     use crate::usbserial::*;
     use crate::shell;
+    use crate::ctlpins;
 
     type LedCmdType = gpio::PC15<Output<PushPull>>;
     type PowerEnableType = gpio::PA4<Output<PushPull>>;
@@ -62,6 +64,8 @@ mod app {
         power_device: PowerEnableType,
 
         adc_dma_transfer: DMATransfer,
+
+        ctl_pins: ctlpins::CTLPins,
 
         pw_a: f32,
         pw_v: f32,
@@ -108,11 +112,7 @@ mod app {
 
         let _button = gpioa.pa0.into_pull_up_input();
 
-        let mut ctl_a = gpioa.pa5.into_open_drain_output();
-        let mut ctl_b = gpioa.pa6.into_open_drain_output();
-        let mut ctl_c = gpioa.pa7.into_open_drain_output();
-        let mut ctl_d = gpioa.pa8.into_open_drain_output();
-        let mut reset_out = gpioa.pa9.into_open_drain_output();
+        let ctl_pins = ctlpins::CTLPins::new();
 
         let mut power_device = gpioa.pa4.into_push_pull_output();
 
@@ -153,8 +153,6 @@ mod app {
         // Give the first buffer to the DMA. The second buffer is held in an Option in `local.buffer` until the transfer is complete
         let adc_dma_transfer = Transfer::init_peripheral_to_memory(dma.0, adc, first_buffer, None, config);
 
-
-
         let mut storage = StorageSwitch::new(
             gpioa.pa15.into_push_pull_output(), //OEn
             gpiob.pb3.into_push_pull_output(), //SEL
@@ -163,12 +161,6 @@ mod app {
         );
 
         storage.power_off();
-
-        reset_out.set_high();
-        ctl_a.set_high();
-        ctl_b.set_high();
-        ctl_c.set_high();
-        ctl_d.set_high();
 
         power_device.set_low();
 
@@ -237,6 +229,7 @@ mod app {
                 storage,
                 power_device,
                 adc_dma_transfer,
+                ctl_pins,
                 pw_a,
                 pw_v,
                 pw_w,
@@ -289,7 +282,7 @@ mod app {
         });
     }
 
-    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, power_device], local=[esc_cnt:u8 = 0, to_dut_serial])]
+    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, power_device, ctl_pins], local=[esc_cnt:u8 = 0, to_dut_serial])]
     fn usb_task(mut cx: usb_task::Context) {
         let usb_dev = &mut cx.shared.usb_dev;
         let shell = &mut cx.shared.shell;
@@ -300,8 +293,9 @@ mod app {
         let powerdev = &mut cx.shared.power_device;
         let to_dut_serial = cx.local.to_dut_serial;
         let esc_cnt = cx.local.esc_cnt;
+        let ctl_pins = &mut cx.shared.ctl_pins;
 
-        (usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev).lock(|usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev| {
+        (usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev, ctl_pins).lock(|usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev, ctl_pins| {
             let serial1 = shell.get_serial_mut();
 
             if !usb_dev.poll(&mut [serial1, dfu]) {
@@ -341,7 +335,7 @@ mod app {
                     }
                 }
             } else {
-                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, powerdev, &mut send_to_dut);
+                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, powerdev, ctl_pins, &mut send_to_dut);
             }
         });
     }
