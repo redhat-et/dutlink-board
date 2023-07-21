@@ -21,6 +21,9 @@ mod app {
         prelude::*,
         timer,
         serial::{config::Config, Tx, Rx, Serial},
+        adc::{config::{AdcConfig, Dma, SampleTime, Scan, Sequence, Resolution}, Adc},
+        dma::{config::DmaConfig, PeripheralToMemory, Stream0, StreamsTuple, Transfer},
+        pac::{ADC1, DMA2},
     };
     use core::fmt::Write;
 
@@ -38,7 +41,7 @@ mod app {
     type PowerEnableType = gpio::PA4<Output<PushPull>>;
     type StorageSwitchType = StorageSwitch<gpio::PA15<Output<PushPull>>, gpio::PB3<Output<PushPull>>,
                                            gpio::PB5<Output<PushPull>>, gpio::PB4<Output<PushPull>>>;
-
+    type DMATransfer = Transfer<Stream0<DMA2>, 0, Adc<ADC1>, PeripheralToMemory, &'static mut [u16; 2]>;
 
     const DUT_TX_BUF_SIZE: usize = 1024;
     // Resources shared between tasks
@@ -57,6 +60,12 @@ mod app {
         storage: StorageSwitchType,
 
         power_device: PowerEnableType,
+
+        adc_dma_transfer: DMATransfer,
+
+        pw_a: f32,
+        pw_v: f32,
+        pw_w: f32,
     }
 
     // Local resources to specific tasks (cannot be shared)
@@ -67,6 +76,7 @@ mod app {
         usart_tx: Tx<pac::USART1>,
         to_dut_serial: Producer<'static, u8, DUT_TX_BUF_SIZE>,          // queue of characters to send to the DUT
         to_dut_serial_consumer: Consumer<'static, u8, DUT_TX_BUF_SIZE>, // consumer side of the queue
+        adc_buffer: Option<&'static mut [u16; 2]>,
     }
 
     #[init(local = [q_to_dut: Queue<u8, DUT_TX_BUF_SIZE> = Queue::new()])]
@@ -119,8 +129,31 @@ mod app {
         usart_rx.listen();
 
 
-        let _current_sense = gpioa.pa1.into_analog();
-        let _vout_sense = gpioa.pa2.into_analog();
+        let current_sense = gpioa.pa1.into_analog();
+        let vout_sense = gpioa.pa2.into_analog();
+        let dma = StreamsTuple::new(dp.DMA2);
+        let config = DmaConfig::default()
+                    .transfer_complete_interrupt(true)
+                    .memory_increment(true)
+                    .double_buffer(false);
+
+        let adc_config = AdcConfig::default()
+                        .dma(Dma::Continuous)
+                        .scan(Scan::Enabled)
+                        .resolution(Resolution::Twelve);
+
+        let mut adc = Adc::adc1(dp.ADC1, true, adc_config);
+
+        adc.configure_channel(&current_sense, Sequence::One, SampleTime::Cycles_480);
+        adc.configure_channel(&vout_sense, Sequence::Two, SampleTime::Cycles_480);
+        adc.enable_temperature_and_vref();
+
+        let first_buffer = cortex_m::singleton!(: [u16; 2] = [0; 2]).unwrap();
+        let adc_buffer = Some(cortex_m::singleton!(: [u16; 2] = [0; 2]).unwrap());
+        // Give the first buffer to the DMA. The second buffer is held in an Option in `local.buffer` until the transfer is complete
+        let adc_dma_transfer = Transfer::init_peripheral_to_memory(dma.0, adc, first_buffer, None, config);
+
+
 
         let mut storage = StorageSwitch::new(
             gpioa.pa15.into_push_pull_output(), //OEn
@@ -141,7 +174,7 @@ mod app {
 
         // setup a timer for the periodic 100ms task
         let mut timer = dp.TIM2.counter_ms(&clocks);
-        timer.start(100.millis()).unwrap();
+        timer.start(10.millis()).unwrap(); //100Hz
         timer.listen(timer::Event::Update);
 
         // Pull the D+ pin down to send a RESET condition to the USB bus.
@@ -186,8 +219,11 @@ mod app {
              monitor_enabled: false,
              meter_enabled: false,
              console_mode: false,};
+        let pw_a = 0.0;
+        let pw_v = 0.0;
+        let pw_w = 0.0;
 
-         let (to_dut_serial, to_dut_serial_consumer) = ctx.local.q_to_dut.split();
+        let (to_dut_serial, to_dut_serial_consumer) = ctx.local.q_to_dut.split();
         (
             Shared {
                 timer,
@@ -199,7 +235,11 @@ mod app {
                 led_rx,
                 led_cmd,
                 storage,
-                power_device
+                power_device,
+                adc_dma_transfer,
+                pw_a,
+                pw_v,
+                pw_w,
             },
             Local {
                 _button,
@@ -207,6 +247,7 @@ mod app {
                 usart_rx,
                 to_dut_serial,
                 to_dut_serial_consumer,
+                adc_buffer,
             },
             // Move the monotonic timer to the RTIC run-time, this enables
             // scheduling
@@ -305,18 +346,101 @@ mod app {
         });
     }
 
-    #[task(binds = TIM2, shared=[timer, dfu,  led_rx, led_tx, led_cmd])]
-    fn timer_expired(mut ctx: timer_expired::Context) {
+    #[task(binds = TIM2, shared=[timer, dfu,  led_rx, led_tx, led_cmd, adc_dma_transfer])]
+    fn periodic_10ms(mut ctx: periodic_10ms::Context) {
 
-        ctx.shared.dfu.lock(|dfu| dfu.tick(100));
+        ctx.shared.dfu.lock(|dfu| dfu.tick(10));
 
         // clear all leds set in other tasts
         ctx.shared.led_rx.lock(|led_rx| led_rx.set_high());
         ctx.shared.led_tx.lock(|led_tx| led_tx.set_high());
         ctx.shared.led_cmd.lock(|led_cmd| led_cmd.set_high());
+
+        ctx.shared.adc_dma_transfer.lock(|transfer| {
+            transfer.start(|adc| {
+                adc.start_conversion();
+            });
+        });
+
         ctx.shared
             .timer
             .lock(|tim| tim.clear_interrupt(timer::Event::Update));
+    }
+
+    const MAVG_COUNT : usize = 100;
+
+    #[task(binds = DMA2_STREAM0, shared=[adc_dma_transfer, pw_a, pw_v, pw_w], local=[
+        adc_buffer,
+        mavg_v_i:usize = 0,
+        mavg_v: [f32; MAVG_COUNT] = [0.0; MAVG_COUNT],
+        mavg_a_i:usize = 0,
+        mavg_a: [f32; MAVG_COUNT] = [0.0; MAVG_COUNT],
+        ])]
+    fn adc_dma(mut cx:adc_dma::Context){
+        let adc_dma_transfer = &mut cx.shared.adc_dma_transfer;
+        let adc_buffer = &mut cx.local.adc_buffer;
+
+        let mavg_v = &mut cx.local.mavg_v;
+        let mavg_v_i = &mut cx.local.mavg_v_i;
+        let mavg_a = &mut cx.local.mavg_a;
+        let mavg_a_i = &mut cx.local.mavg_a_i;
+
+        let buffer = adc_dma_transfer.lock(|transfer| {
+            let (buffer, _) = transfer
+                               .next_transfer(adc_buffer.take().unwrap())
+                               .unwrap();
+            buffer
+        });
+
+        let current = buffer[0];
+        let vout = buffer[1];
+
+        // leave the previous buffer ready again for next transfer
+        *cx.local.adc_buffer = Some(buffer);
+
+        let current_V = (current as f32 - 2048.0) * 3.3 / 4096.0;
+        let current_A = -current_V / 0.264;
+
+        // we get vout from the voltage divider, in 12 bits, 3.3V is 4096
+        let vout_sense_V = (vout as f32) * 3.3 / 4096.0;
+        // we do the reverse calculation to figure out the input voltage
+        let R8 = 2400.0; // R8 is the top resistor in the voltage divider
+        let R9 = 470.0; // R9 is the bottom resistor in the voltage divider
+        let vin = vout_sense_V * (R8 + R9) / R9;
+
+        // moving average filter for vin
+        mavg_v[**mavg_v_i] = vin;
+        **mavg_v_i = (**mavg_v_i + 1) % MAVG_COUNT;
+        let mut sum = 0.0;
+        // not the most efficient implementation to be seen, but it works
+        for i in 0..MAVG_COUNT {
+            sum += mavg_v[i];
+        }
+        let vin_avg = sum / MAVG_COUNT as f32;
+
+        // moving average filter for A
+        mavg_a[**mavg_a_i] = current_A;
+        **mavg_a_i = (**mavg_a_i + 1) % MAVG_COUNT;
+        sum = 0.0;
+        // not the most efficient implementation to be seen, but it works
+        for i in 0..MAVG_COUNT {
+            sum += mavg_a[i];
+        }
+        let amps_avg = sum / MAVG_COUNT as f32;
+        let watts_avg = amps_avg * vin_avg;
+
+        let pw_a = &mut cx.shared.pw_a;
+        let pw_v = &mut cx.shared.pw_v;
+        let pw_w = &mut cx.shared.pw_w;
+        (pw_a, pw_v, pw_w).lock(|pw_a, pw_v, pw_w| {
+            *pw_a = amps_avg;
+            *pw_v = vin_avg;
+            *pw_w = watts_avg;
+        });
+    }
+
+    fn write_power_trace(shell: &mut shell::ShellType, pw_a: f32, pw_v: f32, pw_w: f32) {
+        write!(shell, "\x1b[0;31m{:.3}A {:.3}V {:.3}W>\x1b[0m ", pw_a, pw_v, pw_w).ok();
     }
 
     // Background task, runs whenever no other tasks are running
