@@ -41,7 +41,7 @@ $(TARGET_DEBUG_ELF): src/main.rs Cargo.toml memory.x
 	cargo build
 
 debug: $(TARGET_DEBUG_ELF)
-
+	gdb ./target/thumbv7em-none-eabihf/debug/jumpstarter -x openocd.gdb
 
 jumpstarter.bin: $(TARGET_ELF)
 	arm-none-eabi-objcopy -Obinary $(TARGET_ELF) jumpstarter.bin
