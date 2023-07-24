@@ -112,7 +112,12 @@ mod app {
 
         let _button = gpioa.pa0.into_pull_up_input();
 
-        let ctl_pins = ctlpins::CTLPins::new();
+        let ctl_pins = ctlpins::CTLPins::new(gpioa.pa5.into_dynamic(),
+                                             gpioa.pa6.into_dynamic(),
+                                             gpioa.pa7.into_dynamic(),
+                                             gpioa.pa8.into_dynamic(),
+                                             gpioa.pa9.into_dynamic(),
+                                            );
 
         let mut power_device = gpioa.pa4.into_push_pull_output();
 
