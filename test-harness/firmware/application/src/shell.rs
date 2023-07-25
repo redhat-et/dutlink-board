@@ -5,6 +5,7 @@ use core::fmt::Write;
 use arrayvec::ArrayString;
 
 use crate::ctlpins::{PinState, CTLPinsTrait};
+use crate::powermeter::PowerMeter;
 use crate::{usbserial::*, ctlpins::CTLPins};
 use crate::storage::StorageSwitchTrait;
 use ushell::{
@@ -42,7 +43,13 @@ pub fn new(serial:USBSerialType) -> ShellType {
     shell
 }
 
-pub fn handle_shell_commands<L, S, P>(shell: &mut ShellType, shell_status: &mut ShellStatus, led_cmd: &mut L, storage: &mut S, ctl_pins:&mut CTLPins<P>, send_to_dut: &mut dyn FnMut(&[u8])) 
+pub fn handle_shell_commands<L, S, P>(shell: &mut ShellType,
+                                      shell_status: &mut ShellStatus,
+                                      led_cmd: &mut L,
+                                      storage: &mut S,
+                                      ctl_pins:&mut CTLPins<P>,
+                                      send_to_dut: &mut dyn FnMut(&[u8]),
+                                      power_meter: &mut dyn PowerMeter)
 where
     L: OutputPin,
     S: StorageSwitchTrait,
@@ -62,7 +69,7 @@ where
                         "clear" =>   { shell.clear().ok(); }
                         "console" => { handle_console_cmd(&mut response, args, shell_status); }
                         "monitor" => { handle_monitor_cmd(&mut response, args, shell_status); }
-                        "meter" =>   { handle_meter_cmd(&mut response, args, shell_status); }
+                        "meter" =>   { handle_meter_cmd(&mut response, args, shell_status, power_meter); }
                         "storage" => { handle_storage_cmd(&mut response, args, storage); }
                         "power" =>   { handle_power_cmd(&mut response, args, ctl_pins); }
                         "send" =>    { handle_send_cmd(&mut response, args, send_to_dut); }
@@ -136,7 +143,7 @@ where
     }
 }
 
-fn handle_meter_cmd<B>(response:&mut B, args: &str, shell_status: &mut ShellStatus)
+fn handle_meter_cmd<B>(response:&mut B, args: &str, shell_status: &mut ShellStatus, power_meter: &mut dyn PowerMeter)
 where
     B: Write
  {
@@ -145,7 +152,8 @@ where
         write!(response, "Power meter monitoring enabled").ok();
     } else if args == "read" {
         shell_status.meter_enabled = false;
-        write!(response, "10 mW").ok();
+        power_meter.write(response);
+        write!(response, "\r\n").ok();
     } else if args == "off" {
         shell_status.meter_enabled = false;
         write!(response, "Power monitor disabled").ok();

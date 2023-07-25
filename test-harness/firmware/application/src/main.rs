@@ -9,6 +9,8 @@ mod storage;
 mod usbserial;
 mod shell;
 mod ctlpins;
+mod powermeter;
+mod filter;
 
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
@@ -38,6 +40,7 @@ mod app {
     use crate::usbserial::*;
     use crate::shell;
     use crate::ctlpins;
+    use crate::powermeter::*;
 
     type LedCmdType = gpio::PC15<Output<PushPull>>;
     type StorageSwitchType = StorageSwitch<gpio::PA15<Output<PushPull>>, gpio::PB3<Output<PushPull>>,
@@ -65,9 +68,7 @@ mod app {
 
         ctl_pins: CTLPinsType,
 
-        pw_a: f32,
-        pw_v: f32,
-        pw_w: f32,
+        power_meter: MAVPowerMeter,
     }
 
     // Local resources to specific tasks (cannot be shared)
@@ -149,6 +150,7 @@ mod app {
         adc.configure_channel(&current_sense, Sequence::One, SampleTime::Cycles_480);
         adc.configure_channel(&vout_sense, Sequence::Two, SampleTime::Cycles_480);
         adc.enable_temperature_and_vref();
+        let power_meter = MAVPowerMeter::new();
 
         let first_buffer = cortex_m::singleton!(: [u16; 2] = [0; 2]).unwrap();
         let adc_buffer = Some(cortex_m::singleton!(: [u16; 2] = [0; 2]).unwrap());
@@ -212,9 +214,7 @@ mod app {
              monitor_enabled: false,
              meter_enabled: false,
              console_mode: false,};
-        let pw_a = 0.0;
-        let pw_v = 0.0;
-        let pw_w = 0.0;
+
 
         let (to_dut_serial, to_dut_serial_consumer) = ctx.local.q_to_dut.split();
         (
@@ -230,9 +230,7 @@ mod app {
                 storage,
                 adc_dma_transfer,
                 ctl_pins,
-                pw_a,
-                pw_v,
-                pw_w,
+                power_meter,
             },
             Local {
                 _button,
@@ -282,19 +280,21 @@ mod app {
         });
     }
 
-    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, ctl_pins], local=[esc_cnt:u8 = 0, to_dut_serial])]
+    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, ctl_pins, power_meter], local=[esc_cnt:u8 = 0, to_dut_serial])]
     fn usb_task(mut cx: usb_task::Context) {
-        let usb_dev = &mut cx.shared.usb_dev;
-        let shell = &mut cx.shared.shell;
-        let shell_status = &mut cx.shared.shell_status;
-        let dfu = &mut cx.shared.dfu;
-        let led_cmd = &mut cx.shared.led_cmd;
-        let storage = &mut cx.shared.storage;
-        let to_dut_serial = cx.local.to_dut_serial;
-        let esc_cnt = cx.local.esc_cnt;
-        let ctl_pins = &mut cx.shared.ctl_pins;
+        let usb_dev         = &mut cx.shared.usb_dev;
+        let shell           = &mut cx.shared.shell;
+        let shell_status    = &mut cx.shared.shell_status;
+        let dfu             = &mut cx.shared.dfu;
+        let led_cmd         = &mut cx.shared.led_cmd;
+        let storage         = &mut cx.shared.storage;
+        let to_dut_serial   = cx.local.to_dut_serial;
+        let esc_cnt         = cx.local.esc_cnt;
+        let ctl_pins        = &mut cx.shared.ctl_pins;
+        let power_meter     = &mut cx.shared.power_meter;
 
-        (usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins).lock(|usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins| {
+        (usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins, power_meter).lock(
+            |usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins, power_meter| {
             let serial1 = shell.get_serial_mut();
 
             if !usb_dev.poll(&mut [serial1, dfu]) {
@@ -334,7 +334,7 @@ mod app {
                     }
                 }
             } else {
-                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, ctl_pins, &mut send_to_dut);
+                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, ctl_pins, &mut send_to_dut, power_meter);
             }
         });
     }
@@ -360,23 +360,12 @@ mod app {
             .lock(|tim| tim.clear_interrupt(timer::Event::Update));
     }
 
-    const MAVG_COUNT : usize = 100;
-
-    #[task(binds = DMA2_STREAM0, shared=[adc_dma_transfer, pw_a, pw_v, pw_w], local=[
-        adc_buffer,
-        mavg_v_i:usize = 0,
-        mavg_v: [f32; MAVG_COUNT] = [0.0; MAVG_COUNT],
-        mavg_a_i:usize = 0,
-        mavg_a: [f32; MAVG_COUNT] = [0.0; MAVG_COUNT],
-        ])]
+    #[task(binds = DMA2_STREAM0, shared=[adc_dma_transfer, power_meter], local=[adc_buffer])]
     fn adc_dma(mut cx:adc_dma::Context){
         let adc_dma_transfer = &mut cx.shared.adc_dma_transfer;
         let adc_buffer = &mut cx.local.adc_buffer;
+        let power_meter = &mut cx.shared.power_meter;
 
-        let mavg_v = &mut cx.local.mavg_v;
-        let mavg_v_i = &mut cx.local.mavg_v_i;
-        let mavg_a = &mut cx.local.mavg_a;
-        let mavg_a_i = &mut cx.local.mavg_a_i;
 
         let buffer = adc_dma_transfer.lock(|transfer| {
             let (buffer, _) = transfer
@@ -385,56 +374,32 @@ mod app {
             buffer
         });
 
-        let current = buffer[0];
-        let vout = buffer[1];
+        // get the ADC readings for the current and the output voltage
+        let current_raw = buffer[0];
+        let vout_raw = buffer[1];
 
         // leave the previous buffer ready again for next transfer
         *cx.local.adc_buffer = Some(buffer);
 
-        let current_V = (current as f32 - 2048.0) * 3.3 / 4096.0;
+        // calculate current in amps
+        let current_V = (current_raw as f32 - 2048.0) * 3.3 / 4096.0;
         let current_A = -current_V / 0.264;
 
+        // calculate vin voltage in volts
         // we get vout from the voltage divider, in 12 bits, 3.3V is 4096
-        let vout_sense_V = (vout as f32) * 3.3 / 4096.0;
+        let vout_sense_V = (vout_raw as f32) * 3.3 / 4096.0;
         // we do the reverse calculation to figure out the input voltage
         let R8 = 2400.0; // R8 is the top resistor in the voltage divider
         let R9 = 470.0; // R9 is the bottom resistor in the voltage divider
         let vin = vout_sense_V * (R8 + R9) / R9;
 
-        // moving average filter for vin
-        mavg_v[**mavg_v_i] = vin;
-        **mavg_v_i = (**mavg_v_i + 1) % MAVG_COUNT;
-        let mut sum = 0.0;
-        // not the most efficient implementation to be seen, but it works
-        for i in 0..MAVG_COUNT {
-            sum += mavg_v[i];
-        }
-        let vin_avg = sum / MAVG_COUNT as f32;
-
-        // moving average filter for A
-        mavg_a[**mavg_a_i] = current_A;
-        **mavg_a_i = (**mavg_a_i + 1) % MAVG_COUNT;
-        sum = 0.0;
-        // not the most efficient implementation to be seen, but it works
-        for i in 0..MAVG_COUNT {
-            sum += mavg_a[i];
-        }
-        let amps_avg = sum / MAVG_COUNT as f32;
-        let watts_avg = amps_avg * vin_avg;
-
-        let pw_a = &mut cx.shared.pw_a;
-        let pw_v = &mut cx.shared.pw_v;
-        let pw_w = &mut cx.shared.pw_w;
-        (pw_a, pw_v, pw_w).lock(|pw_a, pw_v, pw_w| {
-            *pw_a = amps_avg;
-            *pw_v = vin_avg;
-            *pw_w = watts_avg;
+        power_meter.lock(|power_meter| {
+            power_meter.feed_voltage(vin);
+            power_meter.feed_current(current_A);
         });
+
     }
 
-    fn write_power_trace(shell: &mut shell::ShellType, pw_a: f32, pw_v: f32, pw_w: f32) {
-        write!(shell, "\x1b[0;31m{:.3}A {:.3}V {:.3}W>\x1b[0m ", pw_a, pw_v, pw_w).ok();
-    }
 
     // Background task, runs whenever no other tasks are running
     #[idle(local=[to_dut_serial_consumer, usart_tx], shared=[led_tx, shell_status])]
