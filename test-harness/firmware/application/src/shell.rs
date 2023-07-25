@@ -4,7 +4,7 @@ use core::fmt::Write;
 
 use arrayvec::ArrayString;
 
-use crate::ctlpins::PinState;
+use crate::ctlpins::{PinState, CTLPinsTrait};
 use crate::{usbserial::*, ctlpins::CTLPins};
 use crate::storage::StorageSwitchTrait;
 use ushell::{
@@ -42,7 +42,7 @@ pub fn new(serial:USBSerialType) -> ShellType {
     shell
 }
 
-pub fn handle_shell_commands<L, S, P>(shell: &mut ShellType, shell_status: &mut ShellStatus, led_cmd: &mut L, storage: &mut S, powerdev: &mut P, ctl_pins:&mut CTLPins, send_to_dut: &mut dyn FnMut(&[u8])) 
+pub fn handle_shell_commands<L, S, P>(shell: &mut ShellType, shell_status: &mut ShellStatus, led_cmd: &mut L, storage: &mut S, ctl_pins:&mut CTLPins<P>, send_to_dut: &mut dyn FnMut(&[u8])) 
 where
     L: OutputPin,
     S: StorageSwitchTrait,
@@ -64,7 +64,7 @@ where
                         "monitor" => { handle_monitor_cmd(&mut response, args, shell_status); }
                         "meter" =>   { handle_meter_cmd(&mut response, args, shell_status); }
                         "storage" => { handle_storage_cmd(&mut response, args, storage); }
-                        "power" =>   { handle_power_cmd(&mut response, args, powerdev); }
+                        "power" =>   { handle_power_cmd(&mut response, args, ctl_pins); }
                         "send" =>    { handle_send_cmd(&mut response, args, send_to_dut); }
                         "set" =>     { handle_set_cmd(&mut response, args, ctl_pins); }
                         "status" =>  { handle_status_cmd(&mut response, args, shell_status); }
@@ -90,16 +90,16 @@ where
     }
 }
 
-fn handle_power_cmd<B, P>(response:&mut B, args: &str, powerdev: &mut P)
+fn handle_power_cmd<B, C>(response:&mut B, args: &str, ctlpins: &mut C)
 where
-    P: OutputPin,
+    C: CTLPinsTrait,
     B: Write
  {
     if args == "on" {
-        powerdev.set_high().ok();
+        ctlpins.power_on();
         write!(response, "Device powered on").ok();
     } else if args == "off" {
-        powerdev.set_low().ok();
+        ctlpins.power_off();
         write!(response, "Device powered off").ok();
     } else {
         write!(response, "usage: power on|off").ok();
@@ -181,9 +181,10 @@ where
     }
 }
 
-fn handle_set_cmd<B>(response:&mut B, args: &str, ctl_pins:&mut CTLPins)
+fn handle_set_cmd<B, C>(response:&mut B, args: &str, ctl_pins:&mut C)
 where
-    B: Write
+    B: Write,
+    C: CTLPinsTrait
 
  {
 

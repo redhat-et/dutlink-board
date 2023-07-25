@@ -68,7 +68,7 @@ copr: clean srpm
 	copr-cli build @redhat-et/jumpstarter rpmbuild/SRPMS/jumpstarter*.src.rpm
 
 flash: $(TARGET_CAB)
-	sudo fwupdmgr local-install $(TARGET_CAB) --allow-older
+	sudo fwupdmgr local-install $(TARGET_CAB) --allow-older --allow-reinstall
 
 clean:
 	rm -rf target jumpstarter.hex jumpstarter.bin *.cab rpmbuild

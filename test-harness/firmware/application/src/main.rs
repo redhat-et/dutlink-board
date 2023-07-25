@@ -40,9 +40,9 @@ mod app {
     use crate::ctlpins;
 
     type LedCmdType = gpio::PC15<Output<PushPull>>;
-    type PowerEnableType = gpio::PA4<Output<PushPull>>;
     type StorageSwitchType = StorageSwitch<gpio::PA15<Output<PushPull>>, gpio::PB3<Output<PushPull>>,
                                            gpio::PB5<Output<PushPull>>, gpio::PB4<Output<PushPull>>>;
+    type CTLPinsType = ctlpins::CTLPins<gpio::PA4<Output<PushPull>>>;
     type DMATransfer = Transfer<Stream0<DMA2>, 0, Adc<ADC1>, PeripheralToMemory, &'static mut [u16; 2]>;
 
     const DUT_TX_BUF_SIZE: usize = 1024;
@@ -61,11 +61,9 @@ mod app {
 
         storage: StorageSwitchType,
 
-        power_device: PowerEnableType,
-
         adc_dma_transfer: DMATransfer,
 
-        ctl_pins: ctlpins::CTLPins,
+        ctl_pins: CTLPinsType,
 
         pw_a: f32,
         pw_v: f32,
@@ -112,14 +110,13 @@ mod app {
 
         let _button = gpioa.pa0.into_pull_up_input();
 
-        let ctl_pins = ctlpins::CTLPins::new(gpioa.pa5.into_dynamic(),
-                                             gpioa.pa6.into_dynamic(),
-                                             gpioa.pa7.into_dynamic(),
-                                             gpioa.pa8.into_dynamic(),
-                                             gpioa.pa9.into_dynamic(),
+        let ctl_pins = ctlpins::CTLPins::new(gpioa.pa5.into_dynamic(),          // ctl_a
+                                             gpioa.pa6.into_dynamic(),          // ctl_b
+                                             gpioa.pa7.into_dynamic(),          // ctl_c
+                                             gpioa.pa8.into_dynamic(),          // ctl_d
+                                             gpioa.pa9.into_dynamic(),          // reset
+                                             gpioa.pa4.into_push_pull_output()  // power enable
                                             );
-
-        let mut power_device = gpioa.pa4.into_push_pull_output();
 
         let pins = (gpiob.pb6, gpiob.pb7);
         let usart = Serial::new(
@@ -167,7 +164,6 @@ mod app {
 
         storage.power_off();
 
-        power_device.set_low();
 
         // setup a timer for the periodic 100ms task
         let mut timer = dp.TIM2.counter_ms(&clocks);
@@ -205,7 +201,7 @@ mod app {
         .manufacturer("Red Hat Inc.")
         .product("Jupstarter")
         .serial_number(get_serial_str())
-        .device_release(0x0002)
+        .device_release(0x0003)
         .self_powered(false)
         .max_power(250)
         .max_packet_size_0(64)
@@ -232,7 +228,6 @@ mod app {
                 led_rx,
                 led_cmd,
                 storage,
-                power_device,
                 adc_dma_transfer,
                 ctl_pins,
                 pw_a,
@@ -287,7 +282,7 @@ mod app {
         });
     }
 
-    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, power_device, ctl_pins], local=[esc_cnt:u8 = 0, to_dut_serial])]
+    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, ctl_pins], local=[esc_cnt:u8 = 0, to_dut_serial])]
     fn usb_task(mut cx: usb_task::Context) {
         let usb_dev = &mut cx.shared.usb_dev;
         let shell = &mut cx.shared.shell;
@@ -295,12 +290,11 @@ mod app {
         let dfu = &mut cx.shared.dfu;
         let led_cmd = &mut cx.shared.led_cmd;
         let storage = &mut cx.shared.storage;
-        let powerdev = &mut cx.shared.power_device;
         let to_dut_serial = cx.local.to_dut_serial;
         let esc_cnt = cx.local.esc_cnt;
         let ctl_pins = &mut cx.shared.ctl_pins;
 
-        (usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev, ctl_pins).lock(|usb_dev, dfu, shell, shell_status, led_cmd, storage, powerdev, ctl_pins| {
+        (usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins).lock(|usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins| {
             let serial1 = shell.get_serial_mut();
 
             if !usb_dev.poll(&mut [serial1, dfu]) {
@@ -340,7 +334,7 @@ mod app {
                     }
                 }
             } else {
-                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, powerdev, ctl_pins, &mut send_to_dut);
+                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, ctl_pins, &mut send_to_dut);
             }
         });
     }
