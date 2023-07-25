@@ -1,32 +1,43 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- Copyright 2023 Miguel Angel Ajo <majopela@redhat.com> -->
+<?xml version='1.0' encoding='utf-8'?>
 <component type="firmware">
-  <id>org.redhat.jumpstarter.testharness</id>
+  <id>com.redhat.jumpstarter.testharness.firmware</id>
   <name>Jumpstarter project test-harness</name>
   <summary>A test harness device to bring Edge devices into CI</summary>
   <description>
-    <p>
-	    This firmware takes care of controlling the onboard hardware, like USB
-	    storage routing, leds, power measurement, power control, etc.
-    </p>
+    <p>This firmware takes care of controlling the onboard hardware, like USB storage routing, leds, power measurement, power control, etc.</p>
   </description>
   <provides>
-    <firmware type="flashed">af277716-d895-5da9-af81-37e877c969ec</firmware><!-- USB\VID_2B23&PID_1012 -->
+    <firmware type="flashed">af277716-d895-5da9-af81-37e877c969ec</firmware>
   </provides>
   <url type="homepage">https://github.com/redhat-et/jumpstarter</url>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
-  <developer_name>Red Hat Inc.</developer_name>
+  <project_license>Apache-2.0</project_license>
+  <categories>
+    <category>X-BaseboardManagementController</category>
+    <category>X-System</category>
+  </categories>
+  <custom>
+    <value key="LVFS::DeviceIntegrity">unsigned</value>
+    <value key="LVFS::VersionFormat">pair</value>
+    <value key="LVFS::UpdateProtocol">com.st.dfuse</value>
+  </custom>
   <releases>
-    <release version="1.0" date="2023-07-14" urgency="medium">
-      <checksum target="content" filename="jumpstarter.bin" />
+    <release version="0.02" date="2023-07-25" urgency="medium">
+      <checksum filename="jumpstarter.bin" target="content"/>
       <description>
-        <p>Makes your device work</p>
+        <p>Provides an initial firmware update, enabling:</p>
+        <ul>
+          <li>set pin commands</li>
+          <li>storage control</li>
+          <li>serial console access</li>
+          <li>power control.</li>
+        </ul>
+        <p>Power metering is still not functional.</p>
       </description>
     </release>
   </releases>
   <tags>
-      <!-- this is consumed by the BKC settings to allow us upgrade/downgrade of firmwares with changing protocols -->
-      <tag>product-protocol-1.0</tag>
+   <!-- this is consumed by the BKC settings to allow us upgrade/downgrade of firmwares with changing protocols -->
+   <tag>jumpstarter-protocol-0.02</tag>
   </tags>
 </component>

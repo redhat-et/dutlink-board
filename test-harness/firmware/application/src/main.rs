@@ -205,7 +205,7 @@ mod app {
         .manufacturer("Red Hat Inc.")
         .product("Jupstarter")
         .serial_number(get_serial_str())
-        .device_release(0x0001)
+        .device_release(0x0002)
         .self_powered(false)
         .max_power(250)
         .max_packet_size_0(64)
