@@ -203,7 +203,7 @@ mod app {
             UsbVidPid(0x2b23, 0x1012),
         )
         .manufacturer("Red Hat Inc.")
-        .product("Jupstarter")
+        .product("Jumpstarter")
         .serial_number(get_serial_str())
         .device_release(0x0002)
         .self_powered(false)
