@@ -31,7 +31,9 @@
           <li>storage control</li>
           <li>serial console access</li>
           <li>power control.</li>
-          <li>basic power metering.</li>
+          <li>power metering.</li>
+          <li>about and version commands</li>
+          <li>10 commands history</li>
         </ul>
       </description>
     </release>

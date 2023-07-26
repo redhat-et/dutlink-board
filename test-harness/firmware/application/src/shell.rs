@@ -14,9 +14,9 @@ use ushell::{
     autocomplete::StaticAutocomplete, history::LRUHistory, Input as ushell_input,
     ShellError as ushell_error, UShell,
 };
-const N_COMMANDS: usize = 10;
-const COMMANDS: [&str; N_COMMANDS] = ["help", "about", "version", "meter", "storage", "send",  "set", "monitor", "power", "console"];
-pub type ShellType = UShell<USBSerialType, StaticAutocomplete<N_COMMANDS>, LRUHistory<128, 4>, 128>;
+const N_COMMANDS: usize = 12;
+const COMMANDS: [&str; N_COMMANDS] = ["help", "about", "version", "meter", "storage", "send",  "set", "monitor", "power", "console", "status", "clear"];
+pub type ShellType = UShell<USBSerialType, StaticAutocomplete<N_COMMANDS>, LRUHistory<128, 10>, 128>;
 pub struct ShellStatus {
     pub monitor_enabled: bool,
     pub meter_enabled: bool,
@@ -28,6 +28,7 @@ pub const CR: &str = "\r\n";
 
 pub const HELP: &str = "\r\n\
         about               : print information about this device\r\n\
+        clear               : clear the screen\r\n\
         help                : print this help\r\n\
         meter on|read|off   : read power consumption\r\n\
         monitor on|off      : enable or disable the serial console monitor in this terminal\r\n\
@@ -35,10 +36,19 @@ pub const HELP: &str = "\r\n\
         power on|off        : power on or off the DUT\r\n\
         send string         : send string to the DUT\r\n\
         set r|a|b|c|d l|h|z : set RESET, CTL_A,B,C or D to low, high or high impedance\r\n\
+        status              : print status of the device\r\n\
         storage dut|host|off: connect storage to DUT, host or disconnect\r\n\
         version             : print version information\r\n\
         ";
 
+pub const ABOUT: &str = "\r\n\
+        Jumpstarter test-harness version: ";
+pub const ABOUT_CONTINUATION: &str = "\r\n\r\n\
+          This is a device for testing images and power consumption of Edge devices in CI or\r\n\
+          development, made as Open Hardware, designed to be used with the jumpstarter project.\r\n\
+          more information can be found here:\r\n\r\n\
+              https://github.com/redhat-et/jumpstarter\r\n\
+        ";
 pub fn new(serial:USBSerialType) -> ShellType {
     let autocomplete = StaticAutocomplete(COMMANDS);
     let history = LRUHistory::default();
@@ -59,7 +69,7 @@ where
     P: OutputPin,
 {
     loop {
-        let mut response = ArrayString::<128>::new();
+        let mut response = ArrayString::<512>::new();
         write!(response, "{0:}", CR).ok();
 
         let result = shell.poll();
@@ -68,6 +78,10 @@ where
             Ok(Some(ushell_input::Command((cmd, args)))) => {
                 led_cmd.set_low().ok();
                 match cmd {
+                        "about" =>   { write!(response, "{}", ABOUT).ok();
+                                       version::write_version(&mut response);
+                                       write!(response, "{}", ABOUT_CONTINUATION).ok();
+                                     }
                         "help" =>    { shell.write_str(HELP).ok(); }
                         "clear" =>   { shell.clear().ok(); }
                         "console" => { handle_console_cmd(&mut response, args, shell_status); }
@@ -155,7 +169,6 @@ where
         shell_status.meter_enabled = true;
         write!(response, "Power meter monitoring enabled").ok();
     } else if args == "read" {
-        shell_status.meter_enabled = false;
         power_meter.write(response);
     } else if args == "off" {
         shell_status.meter_enabled = false;
@@ -265,7 +278,7 @@ where
     B: Write
  {
     if args =="" {
-        write!(response, "Monitor: {}, Meter: {}, Console: {}", shell_status.monitor_enabled, shell_status.meter_enabled, shell_status.console_mode).ok();
+        write!(response, "Monitor: {}, Meter: {}", shell_status.monitor_enabled, shell_status.meter_enabled).ok();
     } else {
         write!(response, "usage: status").ok();
     }
