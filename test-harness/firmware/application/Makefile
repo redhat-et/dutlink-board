@@ -21,7 +21,7 @@
 TARGET      = jumpstarter
 TARGET_ELF  = target/thumbv7em-none-eabihf/release/jumpstarter
 TARGET_DEBUG_ELF  = target/thumbv7em-none-eabihf/debug/jumpstarter
-VERSION     = 0.02
+VERSION     = 0.03
 
 TARGET_CAB = ${TARGET}-${VERSION}.cab
 

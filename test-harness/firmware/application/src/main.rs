@@ -12,8 +12,9 @@ mod ctlpins;
 mod powermeter;
 mod filter;
 
-
-#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
+// dispatchers are free Hardware IRQs we don't use that rtic will use to dispatch
+// software tasks, we are not using EXT interrupts, so we can use those
+#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [EXTI0, EXTI1, EXTI2])]
 mod app {
 
     use stm32f4xx_hal::{
@@ -48,7 +49,7 @@ mod app {
     type CTLPinsType = ctlpins::CTLPins<gpio::PA4<Output<PushPull>>>;
     type DMATransfer = Transfer<Stream0<DMA2>, 0, Adc<ADC1>, PeripheralToMemory, &'static mut [u16; 2]>;
 
-    const DUT_TX_BUF_SIZE: usize = 1024;
+    const DUT_BUF_SIZE: usize = 1024;
     // Resources shared between tasks
     #[shared]
     struct Shared {
@@ -69,6 +70,7 @@ mod app {
         ctl_pins: CTLPinsType,
 
         power_meter: MAVPowerMeter,
+        ms_since_last_power_report: u32,
     }
 
     // Local resources to specific tasks (cannot be shared)
@@ -77,12 +79,14 @@ mod app {
         _button: gpio::PA0<Input>,
         usart_rx: Rx<pac::USART1>,
         usart_tx: Tx<pac::USART1>,
-        to_dut_serial: Producer<'static, u8, DUT_TX_BUF_SIZE>,          // queue of characters to send to the DUT
-        to_dut_serial_consumer: Consumer<'static, u8, DUT_TX_BUF_SIZE>, // consumer side of the queue
+        to_dut_serial: Producer<'static, u8, DUT_BUF_SIZE>,          // queue of characters to send to the DUT
+        to_dut_serial_consumer: Consumer<'static, u8, DUT_BUF_SIZE>, // consumer side of the queue
+        to_host_serial: Producer<'static, u8, DUT_BUF_SIZE>,          // queue of characters to send to the DUT
+        to_host_serial_consumer: Consumer<'static, u8, DUT_BUF_SIZE>, // consumer side of the queue
         adc_buffer: Option<&'static mut [u16; 2]>,
     }
 
-    #[init(local = [q_to_dut: Queue<u8, DUT_TX_BUF_SIZE> = Queue::new()])]
+    #[init(local = [q_to_dut: Queue<u8, DUT_BUF_SIZE> = Queue::new(), q_from_dut: Queue<u8, DUT_BUF_SIZE> = Queue::new()])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>,> = None;
         static mut EP_MEMORY: [u32; 1024] = [0; 1024];
@@ -217,6 +221,7 @@ mod app {
 
 
         let (to_dut_serial, to_dut_serial_consumer) = ctx.local.q_to_dut.split();
+        let (to_host_serial, to_host_serial_consumer) = ctx.local.q_from_dut.split();
         (
             Shared {
                 timer,
@@ -231,6 +236,7 @@ mod app {
                 adc_dma_transfer,
                 ctl_pins,
                 power_meter,
+                ms_since_last_power_report:0,
             },
             Local {
                 _button,
@@ -238,6 +244,8 @@ mod app {
                 usart_rx,
                 to_dut_serial,
                 to_dut_serial_consumer,
+                to_host_serial,
+                to_host_serial_consumer,
                 adc_buffer,
             },
             // Move the monotonic timer to the RTIC run-time, this enables
@@ -246,38 +254,81 @@ mod app {
         )
     }
 
-    #[task(binds = USART1, priority=1, local = [usart_rx], shared = [shell, shell_status, led_rx])]
+    #[task(binds = USART1, priority=1, local = [usart_rx, to_host_serial], shared = [shell_status, led_rx])]
     fn usart_task(cx: usart_task::Context){
         let usart_rx = cx.local.usart_rx;
-        let shell = cx.shared.shell;
         let shell_status = cx.shared.shell_status;
         let led_rx = cx.shared.led_rx;
+        let to_host_serial = cx.local.to_host_serial;
 
-        let mut buf = [0u8; 64];
-        let mut count = 0;
-        (shell, shell_status, led_rx).lock(|shell, shell_status, led_rx| {
-            while usart_rx.is_rx_not_empty() && count<buf.len() {
+        (shell_status, led_rx).lock(|shell_status, led_rx| {
+            while usart_rx.is_rx_not_empty() {
                 led_rx.set_low();
                 match usart_rx.read() {
                     Ok(b) => {
-                        buf[count] = b;
-                        count += 1;
+                        if shell_status.console_mode || shell_status.monitor_enabled {
+                            to_host_serial.enqueue(b).ok(); // this could over-run but it's ok the only solution would be a bigger buffer
+                        }
                     },
                     Err(_e) => {
                         break;
                     }
                 }
             }
-            // when monitor mode or console mode is enabled, we send all data to the USB serial port
-            if shell_status.console_mode || shell_status.monitor_enabled {
-                let serial = shell.get_serial_mut();
-                if count > 0 {
-                    // we use .ok() instead of unwrap() to ignore the error if the host
-                    // isn't reading the usb serial port fast enough and the data overflows
-                    serial.write(&buf[..count]).ok();
-                }
-            }
+            usart_rx.clear_idle_interrupt();
         });
+
+
+        if to_host_serial.len() > 0 {
+           console_monitor_task::spawn().ok();
+        }
+    }
+
+    #[task(local=[to_host_serial_consumer], shared=[shell, shell_status, power_meter])]
+    fn console_monitor_task(mut cx: console_monitor_task::Context) {
+        use arrform::ArrForm;
+
+        let to_host_serial_consumer = cx.local.to_host_serial_consumer;
+        let shell = &mut cx.shared.shell;
+        let shell_status = &mut cx.shared.shell_status;
+        let power_meter = &mut cx.shared.power_meter;
+
+        // if the DUT has sent data over the uart, we send it to the host now
+        // at this point we can incercept and add additional info like power readings
+        if to_host_serial_consumer.len() > 0 {
+            (shell, shell_status, power_meter).lock(|shell, shell_status, power_meter| {
+                let serial1 = shell.get_serial_mut();
+                let mut buf = [0u8; DUT_BUF_SIZE+32];
+                let mut count = 0;
+                loop {
+                    match to_host_serial_consumer.dequeue() {
+                        Some(c) => {
+                            buf[count] = c;
+                            count += 1;
+                            if count >= buf.len() {
+                                break;
+                            }
+                            // check if we need to add power readings after the line break
+                            if shell_status.meter_enabled && c == 0x0d {
+                                let mut af = ArrForm::<64>::new();
+                                power_meter.write_trace(&mut af);
+
+                                for p in af.as_bytes() {
+                                    buf[count] = *p;
+                                    count += 1;
+                                }
+                            }
+                        },
+                        None => {
+                            break;
+                        }
+                    }
+                }
+                if count>0 {
+                    serial1.write(&buf[..count]).ok();
+                }
+            });
+        }
     }
 
     #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, ctl_pins, power_meter], local=[esc_cnt:u8 = 0, to_dut_serial])]
@@ -289,6 +340,7 @@ mod app {
         let led_cmd         = &mut cx.shared.led_cmd;
         let storage         = &mut cx.shared.storage;
         let to_dut_serial   = cx.local.to_dut_serial;
+
         let esc_cnt         = cx.local.esc_cnt;
         let ctl_pins        = &mut cx.shared.ctl_pins;
         let power_meter     = &mut cx.shared.power_meter;
@@ -311,7 +363,7 @@ mod app {
 
             if shell_status.console_mode {
                 // if in console mode, send all data to the DUT, only read from the USB serial port as much as we can send to the DUT
-                let mut buf = [0u8; DUT_TX_BUF_SIZE];
+                let mut buf = [0u8; DUT_BUF_SIZE];
                 match serial1.read(&mut buf[..available_to_dut]) {
                     Ok(count) => {
                         send_to_dut(&buf[..count]);
@@ -413,6 +465,7 @@ mod app {
             let mut escaped = false;
             cortex_m::asm::wfi();
 
+            // NOTE: this can probably be moved to its own software task
             // Is there any data to be sent to the device under test over USART?
             if to_dut_serial_consumer.len() == 0 {
                 continue;

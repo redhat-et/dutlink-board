@@ -27,7 +27,7 @@ pub const CR: &str = "\r\n";
 pub const HELP: &str = "\r\n\
         about               : print information about this device\r\n\
         help                : print this help\r\n\
-        meter read|monitor  : read power consumption, monitor will continue to read until CTRL+C is pressed\r\n\
+        meter on|read|off   : read power consumption\r\n\
         monitor on|off      : enable or disable the serial console monitor in this terminal\r\n\
         console             : enter into serial console mode, exit with CTRL+A 5 times\r\n\
         power on|off        : power on or off the DUT\r\n\
@@ -147,7 +147,7 @@ fn handle_meter_cmd<B>(response:&mut B, args: &str, shell_status: &mut ShellStat
 where
     B: Write
  {
-    if args == "monitor" {
+    if args == "on" {
         shell_status.meter_enabled = true;
         write!(response, "Power meter monitoring enabled").ok();
     } else if args == "read" {
@@ -158,7 +158,7 @@ where
         shell_status.meter_enabled = false;
         write!(response, "Power monitor disabled").ok();
     } else {
-        write!(response, "usage: meter monitor|read|off").ok();
+        write!(response, "usage: meter on|read|off").ok();
     }
 }
 
