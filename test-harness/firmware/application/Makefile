@@ -21,8 +21,10 @@
 TARGET      = jumpstarter
 TARGET_ELF  = target/thumbv7em-none-eabihf/release/jumpstarter
 TARGET_DEBUG_ELF  = target/thumbv7em-none-eabihf/debug/jumpstarter
-VERSION     = 0.03
+VERSION     = 0.04
 
+METADATA_DATE = $(shell date -u +%Y-%m-%d)
+GIT_REF=$(shell git describe --always --abbrev=12 --dirty)
 TARGET_CAB = ${TARGET}-${VERSION}.cab
 
 CAB_FILES =					\
@@ -31,22 +33,25 @@ CAB_FILES =					\
 
 all: $(TARGET_CAB)
 
+firmware.metainfo.xml: firmware.metainfo.xml.in Makefile
+	sed -e "s/@VERSION@/${VERSION}/g" $< | sed "s/@DATE@/${METADATA_DATE}/g" > $@
+
 check: firmware.metainfo.xml
 	appstream-util validate-relax $<
 
-$(TARGET_ELF): src/*.rs Cargo.toml memory.x
-	cargo build --release
+$(TARGET_ELF): src/*.rs Cargo.toml memory.x Makefile
+	VERSION=${VERSION} GIT_REF=${GIT_REF} cargo build --release
 
-$(TARGET_DEBUG_ELF): src/main.rs Cargo.toml memory.x
-	cargo build
+$(TARGET_DEBUG_ELF): src/main.rs Cargo.toml memory.x Makefile
+	VERSION=${VERSION} GIT_REF=${GIT_REF} cargo build
 
 debug: $(TARGET_DEBUG_ELF)
 	gdb ./target/thumbv7em-none-eabihf/debug/jumpstarter -x openocd.gdb
 
-jumpstarter.bin: $(TARGET_ELF)
+jumpstarter.bin: $(TARGET_ELF) Makefile
 	arm-none-eabi-objcopy -Obinary $(TARGET_ELF) jumpstarter.bin
 
-jumpstarter.hex: $(TARGET_ELF)
+jumpstarter.hex: $(TARGET_ELF) Makefile
 	arm-none-eabi-objcopy -Oihex $(TARGET_ELF) jumpstarter.hex
 
 rpmbuild/SOURCES:

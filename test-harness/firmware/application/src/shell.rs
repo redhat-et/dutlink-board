@@ -8,12 +8,14 @@ use crate::ctlpins::{PinState, CTLPinsTrait};
 use crate::powermeter::PowerMeter;
 use crate::{usbserial::*, ctlpins::CTLPins};
 use crate::storage::StorageSwitchTrait;
+use crate::version;
+
 use ushell::{
     autocomplete::StaticAutocomplete, history::LRUHistory, Input as ushell_input,
     ShellError as ushell_error, UShell,
 };
-const N_COMMANDS: usize = 9;
-const COMMANDS: [&str; 9] = ["help", "power", "storage", "send", "reset", "set", "monitor", "power", "console"];
+const N_COMMANDS: usize = 10;
+const COMMANDS: [&str; N_COMMANDS] = ["help", "about", "version", "meter", "storage", "send",  "set", "monitor", "power", "console"];
 pub type ShellType = UShell<USBSerialType, StaticAutocomplete<N_COMMANDS>, LRUHistory<128, 4>, 128>;
 pub struct ShellStatus {
     pub monitor_enabled: bool,
@@ -34,6 +36,7 @@ pub const HELP: &str = "\r\n\
         send string         : send string to the DUT\r\n\
         set r|a|b|c|d l|h|z : set RESET, CTL_A,B,C or D to low, high or high impedance\r\n\
         storage dut|host|off: connect storage to DUT, host or disconnect\r\n\
+        version             : print version information\r\n\
         ";
 
 pub fn new(serial:USBSerialType) -> ShellType {
@@ -75,6 +78,7 @@ where
                         "send" =>    { handle_send_cmd(&mut response, args, send_to_dut); }
                         "set" =>     { handle_set_cmd(&mut response, args, ctl_pins); }
                         "status" =>  { handle_status_cmd(&mut response, args, shell_status); }
+                        "version" => { version::write_version(&mut response); }
                         "" => {}
                         _ => {
                             write!(shell, "{0:}unsupported command{0:}", CR).ok();
@@ -153,7 +157,6 @@ where
     } else if args == "read" {
         shell_status.meter_enabled = false;
         power_meter.write(response);
-        write!(response, "\r\n").ok();
     } else if args == "off" {
         shell_status.meter_enabled = false;
         write!(response, "Power monitor disabled").ok();

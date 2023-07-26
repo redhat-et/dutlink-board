@@ -11,6 +11,7 @@ mod shell;
 mod ctlpins;
 mod powermeter;
 mod filter;
+mod version;
 
 // dispatchers are free Hardware IRQs we don't use that rtic will use to dispatch
 // software tasks, we are not using EXT interrupts, so we can use those
@@ -42,6 +43,7 @@ mod app {
     use crate::shell;
     use crate::ctlpins;
     use crate::powermeter::*;
+    use crate::version;
 
     type LedCmdType = gpio::PC15<Output<PushPull>>;
     type StorageSwitchType = StorageSwitch<gpio::PA15<Output<PushPull>>, gpio::PB3<Output<PushPull>>,
@@ -70,7 +72,6 @@ mod app {
         ctl_pins: CTLPinsType,
 
         power_meter: MAVPowerMeter,
-        ms_since_last_power_report: u32,
     }
 
     // Local resources to specific tasks (cannot be shared)
@@ -207,7 +208,7 @@ mod app {
         .manufacturer("Red Hat Inc.")
         .product("Jupstarter")
         .serial_number(get_serial_str())
-        .device_release(0x0003)
+        .device_release(version::usb_version_bcd_device())
         .self_powered(false)
         .max_power(250)
         .max_packet_size_0(64)
@@ -236,7 +237,6 @@ mod app {
                 adc_dma_transfer,
                 ctl_pins,
                 power_meter,
-                ms_since_last_power_report:0,
             },
             Local {
                 _button,

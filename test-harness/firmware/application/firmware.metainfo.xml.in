@@ -22,7 +22,7 @@
     <value key="LVFS::UpdateProtocol">com.st.dfuse</value>
   </custom>
   <releases>
-    <release version="0.03" date="2023-07-25" urgency="medium">
+    <release version="@VERSION@" date="@DATE@" urgency="medium">
       <checksum filename="jumpstarter.bin" target="content"/>
       <description>
         <p>Provides an initial firmware update, enabling:</p>
