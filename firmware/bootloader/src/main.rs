@@ -64,8 +64,8 @@ static mut EP_MEMORY: [u32; 1024] = [0; 1024];
 const KEY_STAY_IN_BOOT: u32 = 0xb0d42b89;
 
 /// Board flash configuration. MEM_INFO_STRING below must also be changed.
-const BOOTLOADER_SIZE_BYTES: u32 = 32 * 1024;
-const FW_ADDRESS: u32 = 0x0800_8000;
+const BOOTLOADER_SIZE_BYTES: u32 = 64 * 1024;
+const FW_ADDRESS: u32 = 0x0801_0000;
 
 type LedType = gpioc::PC13<Output<PushPull>>;
 
@@ -88,15 +88,17 @@ impl STM32Mem{
 }
 
 impl<'a> DFUMemIO for STM32Mem {
-    const INITIAL_ADDRESS_POINTER: u32 = 0x0800_8000;
+    const INITIAL_ADDRESS_POINTER: u32 = 0x0801_0000;
     const PROGRAM_TIME_MS: u32 = 12; // time it takes to program 128 bytes
-    const ERASE_TIME_MS: u32 = 50;
-    const FULL_ERASE_TIME_MS: u32 = 50 * 112;
-    const MANIFESTATION_TIME_MS: u32 = 1000;
+    const ERASE_TIME_MS: u32 = 200;
+    const FULL_ERASE_TIME_MS: u32 = 30000;
+    const MANIFESTATION_TIME_MS: u32 = 2000;
     const TRANSFER_SIZE: u16 = TRANSFER_SIZE as u16;
 
     // Internal bootloader says: "@Internal Flash  /0x08000000/04*016Kg,01*064Kg,03*128Kg", serial="356438913137"
-    const MEM_INFO_STRING: &'static str = "@Flash/0x08008000/02*016Kg,01*064Kg,03*128Kg";
+    //const MEM_INFO_STRING: &'static str = "@Flash/0x08008000/02*016Kg,01*064Kg,03*128Kg";
+    // The bootloader only takes 16kb so far, but we leave a few 16kB sectors at the start for config
+    const MEM_INFO_STRING: &'static str = "@Flash/0x08010000/01*064Kg,03*128Kg";
     const HAS_DOWNLOAD: bool = true; // download from host into the device is enabled
     const HAS_UPLOAD: bool = false;  // upload from the device to the host is disabled, also read code is commented out
     const MANIFESTATION_TOLERANT: bool = false;

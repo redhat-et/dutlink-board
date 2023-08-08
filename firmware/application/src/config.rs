@@ -1,0 +1,177 @@
+use core::{mem::size_of, cmp::min};
+
+use stm32f4xx_hal::flash::{LockedFlash, FlashExt};
+
+// Configuration is stored in the 3'rd sector of the flash memory, starting at 0x0800_C000.
+// The sector is 16k, so we can store 16 ConfigBlocks of 1k each. The last one with 
+// the magic word is the valid one.
+// Each sector has a limited amout of times it can be erased, so we use the next free block
+// and only erase the sector when all blocks are used.
+
+const FLASH_SECTOR : u8 = 3;
+const FLASH_BASE : usize = 0x0800_0000;
+const FLASH_CONFIG_BASE : usize = 0x0800_C000; // see memory.x
+
+#[repr(C, packed)]
+#[derive(Debug)]
+pub struct ConfigBlock {
+    pub name: [u8; 64],       // device name   
+    pub tags: [u8; 256],      // device tags
+    pub storage: [u8; 256],   // the part after /dev/disk/by-id/<storage>
+    
+    // New variables can go here, but make sure to update the padding below
+    // the previously stored versions will be 0's due to the padding
+
+    padding: [u8; 1024-64-256-256-4], // padding to make up for 1024 byte blocks
+    magic: u32,           // magic word to know if this flash config block is valid
+
+}
+
+impl ConfigBlock {
+    pub fn new() -> Self {
+        ConfigBlock {
+            name: [0; 64],
+            tags: [0; 256],
+            storage: [0; 256],
+            magic: MAGIC,
+            padding: [0; 1024-64-256-256-4],
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.magic == MAGIC
+    }
+
+    pub fn set_name(mut self,name: &[u8]) -> Self {
+        let l = min(name.len(), self.name.len());
+        self.name[..l].copy_from_slice(&name[..l]);
+        self.name[l..].fill(0);
+        self
+    }
+
+    pub fn set_tags(mut self, tags: &[u8]) -> Self {
+        let l = min(tags.len(), self.tags.len());
+        self.tags[..l].copy_from_slice(&tags[..l]);
+        self.tags[l..].fill(0);
+        self
+    }
+
+    pub fn set_storage(mut self, storage: &[u8]) -> Self {
+        let l = min(storage.len(), self.storage.len());
+        self.storage[..l].copy_from_slice(&storage[..l]);
+        self.storage[l..].fill(0);
+        self
+    }
+
+}
+
+const MAGIC: u32 = 0x600dbeef;
+
+// The flash area in 0x0800_C000 - 0x0800_FFFF is reserved for the config block.
+#[repr(C, packed)]
+struct ConfigAreaFlash {
+    config: [ConfigBlock; 16],
+    // DO NOT ADD MORE VARIABLES HERE
+}
+
+pub struct ConfigArea {
+    flash_config: &'static ConfigAreaFlash,
+    flash: LockedFlash,
+}
+
+impl ConfigArea {
+    pub fn new(flash: LockedFlash) -> Self {
+        ConfigArea {
+            flash_config: ConfigAreaFlash::new(),
+            flash: flash,
+        }
+    }
+
+    pub fn get(&self) -> ConfigBlock {
+        self.flash_config.ram_config()
+    }
+
+    pub fn write_config(&mut self, cfg: &ConfigBlock) -> Result<(),()> {
+        let next = self.flash_config.get_next();
+        let next_i: usize;
+        match next {
+            Some(i) => {
+                next_i = i;
+            },
+            None => {
+                let mut unlocked_flash = self.flash.unlocked();
+                unlocked_flash.erase(FLASH_SECTOR).unwrap();
+                next_i = 0;
+            },
+        }
+        let offset = next_i * size_of::<ConfigBlock>();
+        let mut unlocked_flash = self.flash.unlocked();
+        let buffer = unsafe { as_u8_slice(cfg) };
+        let base = FLASH_CONFIG_BASE - FLASH_BASE;
+        unlocked_flash.program(base + offset, buffer.iter()).unwrap();
+
+        Ok(())
+    }
+}
+
+impl ConfigAreaFlash {
+    fn new() -> &'static Self {
+        let cfg = FLASH_CONFIG_BASE as *const ConfigAreaFlash;
+        return unsafe { &*cfg };
+    }
+    
+    fn get_next(&self) -> Option<usize> {
+        for i in 0..16 {
+            if !self.config[i].is_valid() {
+                return Some(i)
+            }
+        }
+        return None
+    }
+
+    fn get_current(&self) -> Option<usize> {
+        for i in (0..16).rev() {
+            if self.config[i].is_valid() {
+                return Some(i)
+            }
+        }
+        return None
+    }
+
+    fn get_config(&self) -> Option<&ConfigBlock> {
+        match self.get_current() {
+            Some(i) => Some(&self.config[i]),
+            None => None,
+        }
+    }
+
+    // get the last config block, as a copy in RAM
+    fn ram_config(&self) -> ConfigBlock {
+        let mut ram_cfg = ConfigBlock::new();
+        
+        match self.get_config() {
+            Some(cfg) => {
+                let src: &[u8] = unsafe { as_u8_slice(cfg) };
+                let dst: &mut [u8] = unsafe { as_mut_u8_slice(&mut ram_cfg) };
+                dst.copy_from_slice(src);
+            },
+            None => {},
+        };
+        ram_cfg
+    }
+}
+
+
+unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+    ::core::slice::from_raw_parts(
+        (p as *const T) as *mut u8,
+        ::core::mem::size_of::<T>(),
+    )
+}
+
+unsafe fn as_mut_u8_slice<T: Sized>(p: &T) -> &mut [u8] {
+    ::core::slice::from_raw_parts_mut(
+        (p as *const T) as *mut u8,
+        ::core::mem::size_of::<T>(),
+    )
+}

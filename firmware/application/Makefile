@@ -42,7 +42,7 @@ check: firmware.metainfo.xml
 $(TARGET_ELF): src/*.rs Cargo.toml memory.x Makefile
 	VERSION=${VERSION} GIT_REF=${GIT_REF} cargo build --release
 
-$(TARGET_DEBUG_ELF): src/main.rs Cargo.toml memory.x Makefile
+$(TARGET_DEBUG_ELF): src/*.rs Cargo.toml memory.x Makefile
 	VERSION=${VERSION} GIT_REF=${GIT_REF} cargo build
 
 debug: $(TARGET_DEBUG_ELF)
@@ -73,7 +73,10 @@ copr: clean srpm
 	copr-cli build @redhat-et/jumpstarter rpmbuild/SRPMS/jumpstarter*.src.rpm
 
 flash: $(TARGET_CAB)
-	sudo fwupdmgr local-install $(TARGET_CAB) --allow-older --allow-reinstall
+	sudo fwupdtool install -vv $(TARGET_CAB) --force --allow-older --allow-reinstall
+
+flash-dfu: jumpstarter.bin
+	sudo dfu-util -s 0x08010000:force:leave -D jumpstarter.bin --verbose
 
 clean:
 	rm -rf target jumpstarter.hex jumpstarter.bin *.cab rpmbuild

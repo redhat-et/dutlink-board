@@ -12,6 +12,7 @@ mod ctlpins;
 mod powermeter;
 mod filter;
 mod version;
+mod config;
 
 // dispatchers are free Hardware IRQs we don't use that rtic will use to dispatch
 // software tasks, we are not using EXT interrupts, so we can use those
@@ -44,6 +45,7 @@ mod app {
     use crate::ctlpins;
     use crate::powermeter::*;
     use crate::version;
+    use crate::config::*;
 
     type LedCmdType = gpio::PC15<Output<PushPull>>;
     type StorageSwitchType = StorageSwitch<gpio::PA15<Output<PushPull>>, gpio::PB3<Output<PushPull>>,
@@ -72,6 +74,8 @@ mod app {
         ctl_pins: CTLPinsType,
 
         power_meter: MAVPowerMeter,
+
+        config: ConfigArea,
     }
 
     // Local resources to specific tasks (cannot be shared)
@@ -223,6 +227,9 @@ mod app {
 
         let (to_dut_serial, to_dut_serial_consumer) = ctx.local.q_to_dut.split();
         let (to_host_serial, to_host_serial_consumer) = ctx.local.q_from_dut.split();
+
+        let config = ConfigArea::new(stm32f4xx_hal::flash::LockedFlash::new(dp.FLASH));
+
         (
             Shared {
                 timer,
@@ -237,6 +244,7 @@ mod app {
                 adc_dma_transfer,
                 ctl_pins,
                 power_meter,
+                config,
             },
             Local {
                 _button,
@@ -331,7 +339,7 @@ mod app {
         }
     }
 
-    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, ctl_pins, power_meter], local=[esc_cnt:u8 = 0, to_dut_serial])]
+    #[task(binds = OTG_FS, shared = [usb_dev, shell, shell_status, dfu, led_cmd, storage, ctl_pins, power_meter, config], local=[esc_cnt:u8 = 0, to_dut_serial])]
     fn usb_task(mut cx: usb_task::Context) {
         let usb_dev         = &mut cx.shared.usb_dev;
         let shell           = &mut cx.shared.shell;
@@ -344,9 +352,10 @@ mod app {
         let esc_cnt         = cx.local.esc_cnt;
         let ctl_pins        = &mut cx.shared.ctl_pins;
         let power_meter     = &mut cx.shared.power_meter;
+        let config          = &mut cx.shared.config;
 
-        (usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins, power_meter).lock(
-            |usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins, power_meter| {
+        (usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins, power_meter, config).lock(
+            |usb_dev, dfu, shell, shell_status, led_cmd, storage, ctl_pins, power_meter, config| {
             let serial1 = shell.get_serial_mut();
 
             if !usb_dev.poll(&mut [serial1, dfu]) {
@@ -373,6 +382,7 @@ mod app {
                                 *esc_cnt = *esc_cnt + 1;
                                 if *esc_cnt == 5 {
                                     shell_status.console_mode = false;
+                                    shell_status.monitor_enabled = false;
                                     shell.write_str("\r\nExiting console mode\r\n").ok();
                                     shell.write_str(shell::SHELL_PROMPT).ok();
                                     *esc_cnt = 0;
@@ -386,7 +396,7 @@ mod app {
                     }
                 }
             } else {
-                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, ctl_pins, &mut send_to_dut, power_meter);
+                shell::handle_shell_commands(shell, shell_status, led_cmd, storage, ctl_pins, &mut send_to_dut, power_meter, config);
             }
         });
     }

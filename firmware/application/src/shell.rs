@@ -4,6 +4,7 @@ use core::fmt::Write;
 
 use arrayvec::ArrayString;
 
+use crate::config::ConfigArea;
 use crate::ctlpins::{PinState, CTLPinsTrait};
 use crate::powermeter::PowerMeter;
 use crate::{usbserial::*, ctlpins::CTLPins};
@@ -14,8 +15,9 @@ use ushell::{
     autocomplete::StaticAutocomplete, history::LRUHistory, Input as ushell_input,
     ShellError as ushell_error, UShell,
 };
-const N_COMMANDS: usize = 12;
-const COMMANDS: [&str; N_COMMANDS] = ["help", "about", "version", "meter", "storage", "send",  "set", "monitor", "power", "console", "status", "clear"];
+const N_COMMANDS: usize = 14;
+const COMMANDS: [&str; N_COMMANDS] = ["help", "about", "get-config", "version", "meter", "storage", "send",
+                                      "set", "set-config", "monitor", "power", "console", "status", "clear"];
 pub type ShellType = UShell<USBSerialType, StaticAutocomplete<N_COMMANDS>, LRUHistory<128, 10>, 128>;
 pub struct ShellStatus {
     pub monitor_enabled: bool,
@@ -36,6 +38,7 @@ pub const HELP: &str = "\r\n\
         power on|off        : power on or off the DUT\r\n\
         send string         : send string to the DUT\r\n\
         set r|a|b|c|d l|h|z : set RESET, CTL_A,B,C or D to low, high or high impedance\r\n\
+        set-config name|tags|storage value : set the config value in flash\r\n\
         status              : print status of the device\r\n\
         storage dut|host|off: connect storage to DUT, host or disconnect\r\n\
         version             : print version information\r\n\
@@ -62,7 +65,8 @@ pub fn handle_shell_commands<L, S, P>(shell: &mut ShellType,
                                       storage: &mut S,
                                       ctl_pins:&mut CTLPins<P>,
                                       send_to_dut: &mut dyn FnMut(&[u8]),
-                                      power_meter: &mut dyn PowerMeter)
+                                      power_meter: &mut dyn PowerMeter,
+                                      config: &mut ConfigArea)
 where
     L: OutputPin,
     S: StorageSwitchTrait,
@@ -78,25 +82,25 @@ where
             Ok(Some(ushell_input::Command((cmd, args)))) => {
                 led_cmd.set_low().ok();
                 match cmd {
-                        "about" =>   { write!(response, "{}", ABOUT).ok();
-                                       version::write_version(&mut response);
-                                       write!(response, "{}", ABOUT_CONTINUATION).ok();
-                                     }
-                        "help" =>    { shell.write_str(HELP).ok(); }
-                        "clear" =>   { shell.clear().ok(); }
-                        "console" => { handle_console_cmd(&mut response, args, shell_status); }
-                        "monitor" => { handle_monitor_cmd(&mut response, args, shell_status); }
-                        "meter" =>   { handle_meter_cmd(&mut response, args, shell_status, power_meter); }
-                        "storage" => { handle_storage_cmd(&mut response, args, storage); }
-                        "power" =>   { handle_power_cmd(&mut response, args, ctl_pins); }
-                        "send" =>    { handle_send_cmd(&mut response, args, send_to_dut); }
-                        "set" =>     { handle_set_cmd(&mut response, args, ctl_pins); }
-                        "status" =>  { handle_status_cmd(&mut response, args, shell_status); }
-                        "version" => { version::write_version(&mut response); }
-                        "" => {}
-                        _ => {
-                            write!(shell, "{0:}unsupported command{0:}", CR).ok();
-                        }
+                        "about" =>      { write!(response, "{}", ABOUT).ok();
+                                          version::write_version(&mut response);
+                                          write!(response, "{}", ABOUT_CONTINUATION).ok();
+                                        }
+                        "help" =>       { shell.write_str(HELP).ok(); }
+                        "clear" =>      { shell.clear().ok(); }
+                        "console" =>    { handle_console_cmd(&mut response, args, shell_status); }
+                        "monitor" =>    { handle_monitor_cmd(&mut response, args, shell_status); }
+                        "meter" =>      { handle_meter_cmd(&mut response, args, shell_status, power_meter); }
+                        "storage" =>    { handle_storage_cmd(&mut response, args, storage); }
+                        "power" =>      { handle_power_cmd(&mut response, args, ctl_pins); }
+                        "send" =>       { handle_send_cmd(&mut response, args, send_to_dut); }
+                        "set" =>        { handle_set_cmd(&mut response, args, ctl_pins); }
+                        "set-config" => { handle_set_config_cmd(&mut response, args, config); }
+                        "get-config" => { handle_get_config_cmd(&mut response, args, config); }
+                        "status" =>     { handle_status_cmd(&mut response, args, shell_status); }
+                        "version" =>    { version::write_version(&mut response); }
+                        "" =>           {}
+                        _ =>            { write!(shell, "{0:}unsupported command{0:}", CR).ok(); }
                 }
                 // If response was added complete with an additional CR
                 if response.len() > 2 {
@@ -263,6 +267,80 @@ where
         write!(response, "Set {} to {}", ctl_str, val_str).ok();
     } else {
         write_set_usage(response)
+    }
+}
+
+fn handle_set_config_cmd<B>(response:&mut B, args: &str, config: &mut ConfigArea)
+where
+    B: Write
+ {
+    let mut split_args = args.split_ascii_whitespace();
+    let key = split_args.next();
+    let val = split_args.next();
+    let mut usage = false;
+
+    if let (Some(k), Some(v)) = (key, val) {
+        let cfg = config.get();
+        if k == "name" {
+            let cfg = cfg.set_name(v.as_bytes());
+            config.write_config(&cfg).ok();
+            write!(response, "Set name to {}", v).ok();
+
+        } else if k == "tags" {
+            let cfg = cfg.set_tags(v.as_bytes());
+            write!(response, "Set tags to {}", v).ok();
+            config.write_config(&cfg).ok();
+
+        } else if k == "storage" {
+            let cfg = cfg.set_storage(v.as_bytes());
+            write!(response, "Set storage to {}", v).ok();
+            config.write_config(&cfg).ok();
+
+        } else {
+            usage = true;
+        }
+    } else {
+        usage = true;
+    }
+
+    if usage {
+        write!(response, "usage: set-config name|tags|storage value").ok();
+    }
+}
+
+fn handle_get_config_cmd<B>(response:&mut B, args: &str, config: &mut ConfigArea)
+where
+    B: Write
+ {
+    let cfg = config.get();
+
+    if args == "name" {
+        write_u8(response, &cfg.name);
+    } else if args == "tags" {
+        write_u8(response, &cfg.tags);
+    } else if args == "storage" {
+        write_u8(response, &cfg.storage);
+    } else if args == "" {
+        write!(response, "name: ").ok();
+        write_u8(response, &cfg.name);
+        write!(response, "\r\ntags: ").ok();
+        write_u8(response, &cfg.tags);
+        write!(response, "\r\nstorage: ").ok();
+        write_u8(response, &cfg.storage);
+    } else {
+        write!(response, "usage: get-config [name|tags|storage]").ok();
+    }
+}
+
+fn write_u8<B>(response:&mut B, val:&[u8])
+where
+    B: Write
+{
+    for c in val.iter() {
+        if *c == 0 {
+            break;
+        }
+        response.write_char(*c as char).ok();
     }
 }
 
