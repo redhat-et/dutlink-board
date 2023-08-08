@@ -42,6 +42,10 @@ impl ConfigBlock {
         self.magic == MAGIC
     }
 
+    pub fn format_error(&self) -> bool {
+        self.magic != MAGIC && self.magic != 0xFFFF_FFFF
+    }
+
     pub fn set_name(mut self,name: &[u8]) -> Self {
         let l = min(name.len(), self.name.len());
         self.name[..l].copy_from_slice(&name[..l]);
@@ -81,16 +85,24 @@ pub struct ConfigArea {
 
 impl ConfigArea {
     pub fn new(flash: LockedFlash) -> Self {
-        ConfigArea {
+        let mut cfg = ConfigArea {
             flash_config: ConfigAreaFlash::new(),
             flash: flash,
+        };
+        if cfg.flash_config.format_error() {
+            cfg.erase_flash();
         }
+        cfg
     }
 
     pub fn get(&self) -> ConfigBlock {
         self.flash_config.ram_config()
     }
 
+    fn erase_flash(&mut self) {
+        let mut unlocked_flash = self.flash.unlocked();
+        unlocked_flash.erase(FLASH_SECTOR).unwrap();
+    }
     pub fn write_config(&mut self, cfg: &ConfigBlock) -> Result<(),()> {
         let next = self.flash_config.get_next();
         let next_i: usize;
@@ -99,8 +111,7 @@ impl ConfigArea {
                 next_i = i;
             },
             None => {
-                let mut unlocked_flash = self.flash.unlocked();
-                unlocked_flash.erase(FLASH_SECTOR).unwrap();
+                self.erase_flash();
                 next_i = 0;
             },
         }
@@ -127,6 +138,16 @@ impl ConfigAreaFlash {
             }
         }
         return None
+    }
+
+    // detect if any of the config blocks have a format error (magic word is not 0x600dbeef of 0xffffffff)
+    pub fn format_error(&self) -> bool {
+        for i in 0..16 {
+            if self.config[i].format_error() {
+                return true
+            }
+        }
+        return false
     }
 
     fn get_current(&self) -> Option<usize> {

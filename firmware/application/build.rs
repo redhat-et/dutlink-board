@@ -6,7 +6,7 @@ use std::path::PathBuf;
 fn main() {
     let version = match env::var("VERSION"){
         Ok(v) => v,
-        Err(_) => "unknown".to_string(),
+        Err(_) => "0.0".to_string(),
     };
 
     let git_version = match env::var("GIT_REF") {
