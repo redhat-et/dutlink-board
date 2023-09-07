@@ -38,7 +38,7 @@ pub const HELP: &str = "\r\n\
         power on|off        : power on or off the DUT\r\n\
         send string         : send string to the DUT\r\n\
         set r|a|b|c|d l|h|z : set RESET, CTL_A,B,C or D to low, high or high impedance\r\n\
-        set-config name|tags|storage value : set the config value in flash\r\n\
+        set-config name|tags|storage|usb_console value : set the config value in flash\r\n\
         status              : print status of the device\r\n\
         storage dut|host|off: connect storage to DUT, host or disconnect\r\n\
         version             : print version information\r\n\
@@ -296,6 +296,11 @@ where
             write!(response, "Set storage to {}", v).ok();
             config.write_config(&cfg).ok();
 
+        } else if k == "usb_console" {
+            let cfg = cfg.set_usb_console(v.as_bytes());
+            write!(response, "Set usb_console to {}", v).ok();
+            config.write_config(&cfg).ok();
+
         } else {
             usage = true;
         }
@@ -304,7 +309,7 @@ where
     }
 
     if usage {
-        write!(response, "usage: set-config name|tags|storage value").ok();
+        write!(response, "usage: set-config name|tags|storage|usb_storage value").ok();
     }
 }
 
@@ -320,6 +325,8 @@ where
         write_u8(response, &cfg.tags);
     } else if args == "storage" {
         write_u8(response, &cfg.storage);
+    } else if args == "usb_console" {
+        write_u8(response, &cfg.usb_console);
     } else if args == "" {
         write!(response, "name: ").ok();
         write_u8(response, &cfg.name);
@@ -327,8 +334,10 @@ where
         write_u8(response, &cfg.tags);
         write!(response, "\r\nstorage: ").ok();
         write_u8(response, &cfg.storage);
+        write!(response, "\r\nusb_console: ").ok();
+        write_u8(response, &cfg.usb_console);
     } else {
-        write!(response, "usage: get-config [name|tags|storage]").ok();
+        write!(response, "usage: get-config [name|tags|storage|usb_console]").ok();
     }
 }
 
