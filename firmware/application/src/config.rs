@@ -15,14 +15,14 @@ const FLASH_CONFIG_BASE : usize = 0x0800_C000; // see memory.x
 #[repr(C, packed)]
 #[derive(Debug)]
 pub struct ConfigBlock {
-    pub name: [u8; 64],       // device name   
+    pub name: [u8; 64],       // device name
     pub tags: [u8; 256],      // device tags
     pub storage: [u8; 256],   // the part after /dev/disk/by-id/<storage>
-    
+    pub usb_console: [u8; 64], // separate usb console i.e. used for the orin agx board to access the USB only UEFI console
     // New variables can go here, but make sure to update the padding below
     // the previously stored versions will be 0's due to the padding
 
-    padding: [u8; 1024-64-256-256-4], // padding to make up for 1024 byte blocks
+    padding: [u8; 1024-64-256-256-64-4], // padding to make up for 1024 byte blocks
     magic: u32,           // magic word to know if this flash config block is valid
 
 }
@@ -33,8 +33,9 @@ impl ConfigBlock {
             name: [0; 64],
             tags: [0; 256],
             storage: [0; 256],
+            usb_console: [0; 64],
             magic: MAGIC,
-            padding: [0; 1024-64-256-256-4],
+            padding: [0; 1024-64-256-256-64-4],
         }
     }
 
@@ -63,6 +64,13 @@ impl ConfigBlock {
     pub fn set_storage(mut self, storage: &[u8]) -> Self {
         let l = min(storage.len(), self.storage.len());
         self.storage[..l].copy_from_slice(&storage[..l]);
+        self.storage[l..].fill(0);
+        self
+    }
+
+    pub fn set_usb_console(mut self, usb_console: &[u8]) -> Self {
+        let l = min(usb_console.len(), self.usb_console.len());
+        self.storage[..l].copy_from_slice(&usb_console[..l]);
         self.storage[l..].fill(0);
         self
     }
@@ -130,7 +138,7 @@ impl ConfigAreaFlash {
         let cfg = FLASH_CONFIG_BASE as *const ConfigAreaFlash;
         return unsafe { &*cfg };
     }
-    
+
     fn get_next(&self) -> Option<usize> {
         for i in 0..16 {
             if !self.config[i].is_valid() {
@@ -169,7 +177,7 @@ impl ConfigAreaFlash {
     // get the last config block, as a copy in RAM
     fn ram_config(&self) -> ConfigBlock {
         let mut ram_cfg = ConfigBlock::new();
-        
+
         match self.get_config() {
             Some(cfg) => {
                 let src: &[u8] = unsafe { as_u8_slice(cfg) };
