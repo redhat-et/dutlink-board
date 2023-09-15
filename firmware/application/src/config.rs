@@ -70,8 +70,8 @@ impl ConfigBlock {
 
     pub fn set_usb_console(mut self, usb_console: &[u8]) -> Self {
         let l = min(usb_console.len(), self.usb_console.len());
-        self.storage[..l].copy_from_slice(&usb_console[..l]);
-        self.storage[l..].fill(0);
+        self.usb_console[..l].copy_from_slice(&usb_console[..l]);
+        self.usb_console[l..].fill(0);
         self
     }
 
