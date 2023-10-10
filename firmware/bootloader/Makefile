@@ -43,5 +43,14 @@ openocd: flash
 clean:
 	rm -rf target dfu-bootloader.bin
 
+.build-container:
+	podman build -f ../application/Containerfile -t firmware-builder
+	touch .build-container
+
+firmware-builder: .build-container
+	podman run -ti --rm -v $(CURDIR)/../../:/workdir -w /workdir/firmware/bootloader firmware-builder bash
+
+in-container: .build-container
+	podman run -ti --rm -v $(CURDIR)/../../:/workdir -w /workdir/firmware/bootloader firmware-builder make $(THIS)
 
 .PHONY: clean all flash openocd

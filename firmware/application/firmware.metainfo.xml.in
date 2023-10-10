@@ -29,6 +29,7 @@
         <ul>
           <li>support for json config field, removed storage</li>
           <li>alternate power control config</li>
+          <li>rescue power mode (power on into recovery)</li>
         </ul>
       </description>
     </release>

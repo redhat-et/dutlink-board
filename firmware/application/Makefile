@@ -81,6 +81,12 @@ flash-dfu: jumpstarter.bin
 clean:
 	rm -rf target jumpstarter.hex jumpstarter.bin *.cab rpmbuild
 
-firmware-builder:
+.build-container:
 	podman build -f Containerfile -t firmware-builder
+	touch .build-container
+
+firmware-builder: .build-container
 	podman run -ti --rm -v $(CURDIR)/../../:/workdir -w /workdir/firmware/application firmware-builder bash
+
+in-container: .build-container
+	podman run -ti --rm -v $(CURDIR)/../../:/workdir -w /workdir/firmware/application firmware-builder make $(THIS)
