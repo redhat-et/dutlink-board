@@ -20,10 +20,11 @@ pub struct ConfigBlock {
     pub usb_console: [u8; 64], // separate usb console i.e. used for the orin agx board to access the USB only UEFI console
     // New variables can go here, but make sure to update the padding below
     // the previously stored versions will be 0's due to the padding
-    pub power_on: [u8; 32], // power_on method i.e. "aL,w1,aZ"
-    pub power_off: [u8; 32], // power_off method i.e. "aL,w11,aZ"
+    pub power_on: [u8; 32], // power_on method i.e. "bL,w1,bZ"
+    pub power_off: [u8; 32], // power_off method i.e. "bL,w11,bZ"
+    pub power_rescue: [u8; 32], // power_off method i.e. "aL,rL,w1,rZ,w1,aZ"
     pub json : [u8; 512], // json blob config
-    padding: [u8; 1024-64-256-64-4-32-32-512], // padding to make up for 1024 byte blocks
+    padding: [u8; 1024-64-256-64-4-32-32-32-512], // padding to make up for 1024 byte blocks
     magic: u32,           // magic word to know if this flash config block is valid
 
 }
@@ -34,11 +35,12 @@ impl ConfigBlock {
             name: [0; 64],
             tags: [0; 256],
             usb_console: [0; 64],
-            power_on: [0; 32], // power_on method i.e. "aL,w1,aZ"
-            power_off: [0; 32], // power_off method i.e. "aL,w11,aZ"
+            power_on: [0; 32],
+            power_off: [0; 32],
+            power_rescue: [0; 32],
             json : [0; 512], // json blob config
             magic: MAGIC,
-            padding: [0; 1024-64-256-64-4-32-32-512],
+            padding: [0; 1024-64-256-64-4-32-32-32-512],
         }
     }
 
@@ -88,6 +90,13 @@ impl ConfigBlock {
         let l = min(power_off.len(), self.power_off.len());
         self.power_off[..l].copy_from_slice(&power_off[..l]);
         self.power_off[l..].fill(0);
+        self
+    }
+
+    pub fn set_power_rescue(mut self, power_rescue: &[u8]) -> Self {
+        let l = min(power_rescue.len(), self.power_rescue.len());
+        self.power_rescue[..l].copy_from_slice(&power_rescue[..l]);
+        self.power_rescue[l..].fill(0);
         self
     }
 

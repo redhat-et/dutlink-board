@@ -39,6 +39,7 @@ pub const HELP: &str = "\r\n\
         send string         : send string to the DUT\r\n\
         set r|a|b|c|d l|h|z : set RESET, CTL_A,B,C or D to low, high or high impedance\r\n\
         set-config name|tags|json|usb_console|poweron|poweroff value : set the config value in flash\r\n\
+        get-config          : print all the config parameters\r\n\
         status              : print status of the device\r\n\
         storage dut|host|off: connect storage to DUT, host or disconnect\r\n\
         version             : print version information\r\n\
@@ -136,8 +137,11 @@ where
     } else if args == "force-on" {
         ctlpins.power_on(&[0u8; 0]);
         write!(response, "Device forced on").ok();
+    } else if args == "rescue" {
+        ctlpins.power_on(&config.get().power_rescue);
+        write!(response, "Device powered on to rescue").ok();
     } else {
-        write!(response, "usage: power on|off|force-on|force-off").ok();
+        write!(response, "usage: power on|off|force-on|force-off|rescue").ok();
     }
 }
 
@@ -237,7 +241,7 @@ where
             write_set_usage(response);
             return;
         }
-        // TODO: really set the pins
+
         let ctl_str = match ctl {
             'r' => "/RESET",
             'a' => "CTL_A",
@@ -321,6 +325,10 @@ where
             let cfg = cfg.set_power_off(v.as_bytes());
             write!(response, "Set power_off to {}", v).ok();
             config.write_config(&cfg).ok();
+        } else if k == "power_rescue" {
+            let cfg = cfg.set_power_rescue(v.as_bytes());
+            write!(response, "Set power_rescue to {}", v).ok();
+            config.write_config(&cfg).ok();
         } else {
             usage = true;
         }
@@ -347,6 +355,12 @@ where
         write_u8(response, &cfg.json);
     } else if args == "usb_console" {
         write_u8(response, &cfg.usb_console);
+    } else if args == "power_on" {
+        write_u8(response, &cfg.power_on);
+    } else if args == "power_off" {
+        write_u8(response, &cfg.power_off);
+    } else if args == "power_rescue" {
+        write_u8(response, &cfg.power_rescue);
     } else if args == "" {
         write!(response, "name: ").ok();
         write_u8(response, &cfg.name);
@@ -360,8 +374,10 @@ where
         write_u8(response, &cfg.power_on);
         write!(response, "\r\npower_off: ").ok();
         write_u8(response, &cfg.power_off);
+        write!(response, "\r\npower_rescue: ").ok();
+        write_u8(response, &cfg.power_off);
     } else {
-        write!(response, "usage: get-config [name|tags|json|usb_console|power_on|power_off]").ok();
+        write!(response, "usage: get-config [name|tags|json|usb_console|power_on|power_off|power_rescue]").ok();
     }
 }
 
