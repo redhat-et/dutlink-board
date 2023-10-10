@@ -18,7 +18,7 @@ use ushell::{
 const N_COMMANDS: usize = 14;
 const COMMANDS: [&str; N_COMMANDS] = ["help", "about", "get-config", "version", "meter", "storage", "send",
                                       "set", "set-config", "monitor", "power", "console", "status", "clear"];
-pub type ShellType = UShell<USBSerialType, StaticAutocomplete<N_COMMANDS>, LRUHistory<128, 10>, 128>;
+pub type ShellType = UShell<USBSerialType, StaticAutocomplete<N_COMMANDS>, LRUHistory<512, 10>, 512>;
 pub struct ShellStatus {
     pub monitor_enabled: bool,
     pub meter_enabled: bool,
@@ -38,7 +38,7 @@ pub const HELP: &str = "\r\n\
         power on|off        : power on or off the DUT\r\n\
         send string         : send string to the DUT\r\n\
         set r|a|b|c|d l|h|z : set RESET, CTL_A,B,C or D to low, high or high impedance\r\n\
-        set-config name|tags|storage|usb_console value : set the config value in flash\r\n\
+        set-config name|tags|json|usb_console|poweron|poweroff value : set the config value in flash\r\n\
         status              : print status of the device\r\n\
         storage dut|host|off: connect storage to DUT, host or disconnect\r\n\
         version             : print version information\r\n\
@@ -92,7 +92,7 @@ where
                         "monitor" =>    { handle_monitor_cmd(&mut response, args, shell_status); }
                         "meter" =>      { handle_meter_cmd(&mut response, args, shell_status, power_meter); }
                         "storage" =>    { handle_storage_cmd(&mut response, args, storage); }
-                        "power" =>      { handle_power_cmd(&mut response, args, ctl_pins); }
+                        "power" =>      { handle_power_cmd(&mut response, args, ctl_pins, config); }
                         "send" =>       { handle_send_cmd(&mut response, args, send_to_dut); }
                         "set" =>        { handle_set_cmd(&mut response, args, ctl_pins); }
                         "set-config" => { handle_set_config_cmd(&mut response, args, config); }
@@ -119,19 +119,25 @@ where
     }
 }
 
-fn handle_power_cmd<B, C>(response:&mut B, args: &str, ctlpins: &mut C)
+fn handle_power_cmd<B, C>(response:&mut B, args: &str, ctlpins: &mut C, config: &ConfigArea)
 where
     C: CTLPinsTrait,
     B: Write
  {
     if args == "on" {
-        ctlpins.power_on();
+        ctlpins.power_on(&config.get().power_on);
         write!(response, "Device powered on").ok();
     } else if args == "off" {
-        ctlpins.power_off();
+        ctlpins.power_off(&config.get().power_off);
         write!(response, "Device powered off").ok();
+    } else if args == "force-off" {
+        ctlpins.power_off(&[0u8; 0]);
+        write!(response, "Device forced off").ok();
+    } else if args == "force-on" {
+        ctlpins.power_on(&[0u8; 0]);
+        write!(response, "Device forced on").ok();
     } else {
-        write!(response, "usage: power on|off").ok();
+        write!(response, "usage: power on|off|force-on|force-off").ok();
     }
 }
 
@@ -276,8 +282,13 @@ where
  {
     let mut split_args = args.split_ascii_whitespace();
     let key = split_args.next();
-    let val = split_args.next();
+    let mut val = split_args.next();
     let mut usage = false;
+
+    // empty argument = clear
+    if val == None {
+        val = Some("");
+    }
 
     if let (Some(k), Some(v)) = (key, val) {
         let cfg = config.get();
@@ -291,9 +302,9 @@ where
             write!(response, "Set tags to {}", v).ok();
             config.write_config(&cfg).ok();
 
-        } else if k == "storage" {
-            let cfg = cfg.set_storage(v.as_bytes());
-            write!(response, "Set storage to {}", v).ok();
+        } else if k == "json" {
+            let cfg = cfg.set_json(v.as_bytes());
+            write!(response, "Set json to {}", v).ok();
             config.write_config(&cfg).ok();
 
         } else if k == "usb_console" {
@@ -301,6 +312,15 @@ where
             write!(response, "Set usb_console to {}", v).ok();
             config.write_config(&cfg).ok();
 
+        } else if k == "power_on" {
+            let cfg = cfg.set_power_on(v.as_bytes());
+            write!(response, "Set power_on to {}", v).ok();
+            config.write_config(&cfg).ok();
+
+        } else if k == "power_off" {
+            let cfg = cfg.set_power_off(v.as_bytes());
+            write!(response, "Set power_off to {}", v).ok();
+            config.write_config(&cfg).ok();
         } else {
             usage = true;
         }
@@ -323,8 +343,8 @@ where
         write_u8(response, &cfg.name);
     } else if args == "tags" {
         write_u8(response, &cfg.tags);
-    } else if args == "storage" {
-        write_u8(response, &cfg.storage);
+    } else if args == "json" {
+        write_u8(response, &cfg.json);
     } else if args == "usb_console" {
         write_u8(response, &cfg.usb_console);
     } else if args == "" {
@@ -332,12 +352,16 @@ where
         write_u8(response, &cfg.name);
         write!(response, "\r\ntags: ").ok();
         write_u8(response, &cfg.tags);
-        write!(response, "\r\nstorage: ").ok();
-        write_u8(response, &cfg.storage);
+        write!(response, "\r\njson: ").ok();
+        write_u8(response, &cfg.json);
         write!(response, "\r\nusb_console: ").ok();
         write_u8(response, &cfg.usb_console);
+        write!(response, "\r\npower_on: ").ok();
+        write_u8(response, &cfg.power_on);
+        write!(response, "\r\npower_off: ").ok();
+        write_u8(response, &cfg.power_off);
     } else {
-        write!(response, "usage: get-config [name|tags|storage|usb_console]").ok();
+        write!(response, "usage: get-config [name|tags|json|usb_console|power_on|power_off]").ok();
     }
 }
 

@@ -18,8 +18,8 @@ pub trait CTLPinsTrait {
     fn set_ctl_c(&mut self, state:PinState);
     fn set_ctl_d(&mut self, state:PinState);
     fn set_reset(&mut self, state:PinState);
-    fn power_on(&mut self);
-    fn power_off(&mut self);
+    fn power_on(&mut self, on_seq: &[u8]);
+    fn power_off(&mut self, off_seq: &[u8]);
 
 }
 
@@ -61,7 +61,8 @@ where
         instance.set_ctl_c(PinState::Floating);
         instance.set_ctl_d(PinState::Floating);
         instance.set_reset(PinState::Floating);
-        instance.power_off();
+        let empty: [u8; 0] = [];
+        instance.power_off(&empty);
         instance
     }
 
@@ -105,6 +106,61 @@ where
         }
     }
 
+    fn _float_all(&mut self) {
+        self._set_ctl_a(PinState::Floating);
+        self._set_ctl_b(PinState::Floating);
+        self._set_ctl_c(PinState::Floating);
+        self._set_ctl_d(PinState::Floating);
+        self._set_reset(PinState::Floating);
+    }
+
+    fn _lower(&self, ch:u8) -> u8 {
+        // ensure lowcase ascii
+        if (ch>64) && (ch<91) {
+            return ch ^0x20;
+        }
+        return ch
+    }
+    fn _status_from_u8(&self, ch:u8) -> PinState {
+        match self._lower(ch) {
+            b'h' => PinState::High,
+            b'l' => PinState::Low,
+            b'z' => PinState::Floating,
+            _ => PinState::Floating,
+        }
+    }
+    fn _run_sequence(&mut self, sequence: &[u8]) {
+        let mut p = 0;
+        while p + 1 < sequence.len() {
+            let pin = self._lower(sequence[p]);
+
+            p+=1;
+            match pin {
+                b'a' => { self._set_ctl_a(self._status_from_u8(sequence[p])); p+=1},
+                b'b' => { self._set_ctl_b(self._status_from_u8(sequence[p])); p+=1},
+                b'c' => { self._set_ctl_c(self._status_from_u8(sequence[p])); p+=1},
+                b'd' => { self._set_ctl_d(self._status_from_u8(sequence[p])); p+=1},
+                b'r' => { self._set_reset(self._status_from_u8(sequence[p])); p+=1},
+                b'w' => p = self._wait(sequence, p),
+                b',' => {}, // ignore commas
+                _ => {}, // ignore unknown commands
+            }
+        }
+    }
+
+    fn _wait(&self, sequence: &[u8], mut p: usize) -> usize {
+        let mut wait:u32 = 0;
+        while p < sequence.len() {
+            let ch = sequence[p];
+            if (ch < b'0') || (ch > b'9') {
+                break;
+            }
+            wait = wait * 10 + (ch - b'0') as u32;
+            p += 1;
+        }
+        cortex_m::asm::delay(33_000_000 * wait);
+        p
+    }
 }
 
 impl<PWPin> CTLPinsTrait for CTLPins<PWPin>
@@ -148,25 +204,27 @@ where
         }
     }
 
-    fn power_on(&mut self) {
+    fn power_on(&mut self, on_seq: &[u8]) {
         self._set_ctl_a(self.stored_a);
         self._set_ctl_b(self.stored_b);
         self._set_ctl_c(self.stored_c);
         self._set_ctl_d(self.stored_d);
         self._set_reset(self.stored_reset);
         self.power.set_high().ok();
+        self._run_sequence(on_seq);
         self.on = true;
     }
 
-    fn power_off(&mut self) {
-        // we set the control pins to floating while in power off, so power is not drawn
-        // from the output pins into the carried board
-        self._set_ctl_a(PinState::Floating);
-        self._set_ctl_b(PinState::Floating);
-        self._set_ctl_c(PinState::Floating);
-        self._set_ctl_d(PinState::Floating);
-        self._set_reset(PinState::Floating);
-        self.power.set_low().ok();
+    fn power_off(&mut self, on_seq: &[u8]) {
+        if on_seq.len() == 0 {
+            // we set the control pins to floating while in power off, so power is not drawn
+            // from the output pins into the carried board
+            self._float_all();
+            self.power.set_low().ok();
+        } else {
+            self.power.set_high().ok();
+            self._run_sequence(on_seq);
+        }
         self.on = false;
     }
 }

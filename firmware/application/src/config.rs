@@ -17,12 +17,13 @@ const FLASH_CONFIG_BASE : usize = 0x0800_C000; // see memory.x
 pub struct ConfigBlock {
     pub name: [u8; 64],       // device name
     pub tags: [u8; 256],      // device tags
-    pub storage: [u8; 256],   // the part after /dev/disk/by-id/<storage>
     pub usb_console: [u8; 64], // separate usb console i.e. used for the orin agx board to access the USB only UEFI console
     // New variables can go here, but make sure to update the padding below
     // the previously stored versions will be 0's due to the padding
-
-    padding: [u8; 1024-64-256-256-64-4], // padding to make up for 1024 byte blocks
+    pub power_on: [u8; 32], // power_on method i.e. "aL,w1,aZ"
+    pub power_off: [u8; 32], // power_off method i.e. "aL,w11,aZ"
+    pub json : [u8; 512], // json blob config
+    padding: [u8; 1024-64-256-64-4-32-32-512], // padding to make up for 1024 byte blocks
     magic: u32,           // magic word to know if this flash config block is valid
 
 }
@@ -32,10 +33,12 @@ impl ConfigBlock {
         ConfigBlock {
             name: [0; 64],
             tags: [0; 256],
-            storage: [0; 256],
             usb_console: [0; 64],
+            power_on: [0; 32], // power_on method i.e. "aL,w1,aZ"
+            power_off: [0; 32], // power_off method i.e. "aL,w11,aZ"
+            json : [0; 512], // json blob config
             magic: MAGIC,
-            padding: [0; 1024-64-256-256-64-4],
+            padding: [0; 1024-64-256-64-4-32-32-512],
         }
     }
 
@@ -61,23 +64,36 @@ impl ConfigBlock {
         self
     }
 
-    pub fn set_storage(mut self, storage: &[u8]) -> Self {
-        let l = min(storage.len(), self.storage.len());
-        self.storage[..l].copy_from_slice(&storage[..l]);
-        self.storage[l..].fill(0);
+    pub fn set_json(mut self, json: &[u8]) -> Self {
+        let l = min(json.len(), self.json.len());
+        self.json[..l].copy_from_slice(&json[..l]);
+        self.json[l..].fill(0);
         self
     }
 
     pub fn set_usb_console(mut self, usb_console: &[u8]) -> Self {
         let l = min(usb_console.len(), self.usb_console.len());
-        self.storage[..l].copy_from_slice(&usb_console[..l]);
-        self.storage[l..].fill(0);
+        self.usb_console[..l].copy_from_slice(&usb_console[..l]);
+        self.usb_console[l..].fill(0);
+        self
+    }
+
+    pub fn set_power_on(mut self, power_on: &[u8]) -> Self {
+        let l = min(power_on.len(), self.power_on.len());
+        self.power_on[..l].copy_from_slice(&power_on[..l]);
+        self.power_on[l..].fill(0);
+        self
+    }
+    pub fn set_power_off(mut self, power_off: &[u8]) -> Self {
+        let l = min(power_off.len(), self.power_off.len());
+        self.power_off[..l].copy_from_slice(&power_off[..l]);
+        self.power_off[l..].fill(0);
         self
     }
 
 }
 
-const MAGIC: u32 = 0x600dbeef;
+const MAGIC: u32 = 0x601dbeef;
 
 // The flash area in 0x0800_C000 - 0x0800_FFFF is reserved for the config block.
 #[repr(C, packed)]

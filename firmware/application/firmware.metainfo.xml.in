@@ -27,6 +27,16 @@
       <description>
         <p>Provides an initial firmware update, enabling:</p>
         <ul>
+          <li>support for json config field, removed storage</li>
+          <li>alternate power control config</li>
+        </ul>
+      </description>
+    </release>
+     <release version="0.05" date="2023-08-14" urgency="medium">
+      <checksum filename="jumpstarter.bin" target="content"/>
+      <description>
+        <p>Provides an initial firmware update, enabling:</p>
+        <ul>
           <li>set pin commands</li>
           <li>storage control</li>
           <li>serial console access</li>
