@@ -375,7 +375,7 @@ where
         write!(response, "\r\npower_off: ").ok();
         write_u8(response, &cfg.power_off);
         write!(response, "\r\npower_rescue: ").ok();
-        write_u8(response, &cfg.power_off);
+        write_u8(response, &cfg.power_rescue);
     } else {
         write!(response, "usage: get-config [name|tags|json|usb_console|power_on|power_off|power_rescue]").ok();
     }
