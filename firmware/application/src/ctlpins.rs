@@ -175,6 +175,7 @@ where
 
             p+=1;
             match pin {
+                b'\0' => break,
                 b'a' => { self._set_ctl_a(self._status_from_u8(sequence[p])); p+=1},
                 b'b' => { self._set_ctl_b(self._status_from_u8(sequence[p])); p+=1},
                 b'c' => { self._set_ctl_c(self._status_from_u8(sequence[p])); p+=1},
@@ -269,7 +270,7 @@ where
         self._set_ctl_c(self.stored_c);
         self._set_ctl_d(self.stored_d);
         self._set_reset(self.stored_reset);
-        if on_seq.len() == 0 {
+        if on_seq.len() == 0 || (on_seq.len()>0 && on_seq[0] == b'\0') {
             self.power.set_high().ok();
         } else {
             self._run_sequence(on_seq);
@@ -278,7 +279,7 @@ where
     }
 
     fn power_off(&mut self, on_seq: &[u8]) {
-        if on_seq.len() == 0 {
+        if on_seq.len() == 0 || (on_seq.len()>0 && on_seq[0] == b'\0') {
             // we set the control pins to floating while in power off, so power is not drawn
             // from the output pins into the carried board
             self._float_not_off_tolerant();

@@ -25,6 +25,14 @@
     <release version="@VERSION@" date="@DATE@" urgency="medium">
       <checksum filename="jumpstarter.bin" target="content"/>
       <description>
+        <p>Bugfix empty power control config, in that case the
+        normal analog power control should be performed, but
+        0.06 requires a config to be present (bug).</p>
+      </description>
+    </release>
+    <release version="0.06" date="2023-10-11" urgency="medium">
+      <checksum filename="jumpstarter.bin" target="content"/>
+      <description>
         <p>Provides an initial firmware update, enabling:</p>
         <ul>
           <li>support for json config field, removed storage</li>
