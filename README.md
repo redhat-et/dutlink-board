@@ -41,8 +41,8 @@ agent that will perform the control loop on the Device Under Test.
 
 Yes, we are optimistic with versioning!
 
-![image](./manufacturing/1.0.0/jumpstarter_top.jpg)
-![image](./manufacturing/1.0.0/jumpstarter_up.jpg)
-![image](./manufacturing/1.0.0/jumpstarter_low.jpg)
-![image](./manufacturing/1.0.0/jumpstarter_bottom.jpg)
+![image](./hardware/manufacturing/1.0.0/jumpstarter_top.jpg)
+![image](./hardware/manufacturing/1.0.0/jumpstarter_up.jpg)
+![image](./hardware/manufacturing/1.0.0/jumpstarter_low.jpg)
+![image](./hardware/manufacturing/1.0.0/jumpstarter_bottom.jpg)
 
