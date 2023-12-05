@@ -860,6 +860,10 @@
           (name "GND" (effects (font (size 1.27 1.27))))
           (number "20" (effects (font (size 1.27 1.27))))
         )
+        (pin power_in line (at 13.97 -39.37 90) (length 2.54)
+          (name "GND" (effects (font (size 1.27 1.27))))
+          (number "21" (effects (font (size 1.27 1.27))))
+        )
         (pin bidirectional line (at 17.78 -3.81 180) (length 2.54)
           (name "A0p" (effects (font (size 1.27 1.27))))
           (number "3" (effects (font (size 1.27 1.27))))
@@ -1591,6 +1595,10 @@
   (wire (pts (xy 163.83 115.57) (xy 185.42 115.57))
     (stroke (width 0) (type default))
     (uuid 6d6ff8cb-0c3e-4e33-aa2d-600591949966)
+  )
+  (wire (pts (xy 133.35 142.24) (xy 133.35 147.32))
+    (stroke (width 0) (type default))
+    (uuid 6e7f4ea6-b0a3-4365-b60c-33cd5511c7a6)
   )
   (wire (pts (xy 217.17 80.01) (xy 226.06 80.01))
     (stroke (width 0) (type default))
@@ -3199,6 +3207,7 @@
     (pin "7" (uuid 835c31f4-a13c-4577-a985-48049b41b7b3))
     (pin "8" (uuid 678ae815-3502-467f-8f15-4e691e95c1d9))
     (pin "9" (uuid ffe91ec7-bc27-4e96-808a-1a3f6c55df39))
+    (pin "21" (uuid 3c7d1c2e-b4ea-4662-99f3-81fa67b342ad))
     (instances
       (project "jumpstarter"
         (path "/5e49fb74-0a9b-4946-8b59-2b8244d10fd9/90c9b6c3-4525-4edf-8d73-ac39bc46dfd1"
@@ -3462,6 +3471,31 @@
       (project "jumpstarter"
         (path "/5e49fb74-0a9b-4946-8b59-2b8244d10fd9/90c9b6c3-4525-4edf-8d73-ac39bc46dfd1"
           (reference "#PWR074") (unit 1)
+        )
+      )
+    )
+  )
+
+  (symbol (lib_id "power:GND") (at 133.35 147.32 0) (unit 1)
+    (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
+    (uuid ed857bab-7b51-40be-883f-33340236672f)
+    (property "Reference" "#PWR047" (at 133.35 153.67 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Value" "GND" (at 133.35 152.4 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Footprint" "" (at 133.35 147.32 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Datasheet" "" (at 133.35 147.32 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (pin "1" (uuid 3db155f8-5c0e-4dd2-b63b-8b65cb3de73e))
+    (instances
+      (project "jumpstarter"
+        (path "/5e49fb74-0a9b-4946-8b59-2b8244d10fd9/90c9b6c3-4525-4edf-8d73-ac39bc46dfd1"
+          (reference "#PWR047") (unit 1)
         )
       )
     )
