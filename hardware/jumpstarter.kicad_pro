@@ -45,7 +45,7 @@
         "silk_text_thickness": 0.15,
         "silk_text_upright": false,
         "zones": {
-          "min_clearance": 0.3
+          "min_clearance": 0.19999999999999998
         }
       },
       "diff_pair_dimensions": [
@@ -55,7 +55,13 @@
           "width": 0.0
         }
       ],
-      "drc_exclusions": [],
+      "drc_exclusions": [
+        "clearance|109777500|167069000|ef0666a9-4054-4602-8f17-c5bcb05cbe39|1ce5c01b-7e3f-4d36-a459-92b7d49d267d",
+        "clearance|109777500|167694000|61bf1b1d-1055-42b3-9f5a-6a1c697b93dd|0e489a07-5ad1-4579-ae26-8c5c3d73e097",
+        "clearance|110002500|168431500|0e489a07-5ad1-4579-ae26-8c5c3d73e097|b4620411-d4dd-4e36-888f-a7e01d8b2e81",
+        "clearance|110577500|167069000|1500829b-7d72-4055-b199-a8cc5630b2e1|f9a8e7c0-7d5d-40a2-a9a8-b251136af7f5",
+        "clearance|110577500|167868500|c8b5261a-ac7e-4ee0-a169-bd4bbff467b0|f42ed467-0f47-4099-8f6c-1667e496e4c6"
+      ],
       "meta": {
         "version": 2
       },
@@ -91,7 +97,7 @@
         "padstack": "warning",
         "pth_inside_courtyard": "ignore",
         "shorting_items": "error",
-        "silk_edge_clearance": "warning",
+        "silk_edge_clearance": "ignore",
         "silk_over_copper": "warning",
         "silk_overlap": "warning",
         "skew_out_of_range": "error",
@@ -175,6 +181,7 @@
         0.0,
         0.2032,
         0.3,
+        0.5,
         0.6,
         1.8,
         2.0,
