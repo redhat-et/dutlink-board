@@ -1,4 +1,4 @@
-22185735753085392
+22192536016333551
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -90607,6 +90607,34 @@ USB 3.0 B
 0
 11
 10
+VQFN
+QFN-100_EP_14x14_Pitch0.4mm
+
+
+0
+172
+101
+VQFN100
+VQFN100_KDX_MCH
+
+USB7206C/KDX 
+0
+172
+101
+VQFN100
+VQFN100_KDX_MCH-L
+
+USB7206C/KDX 
+0
+101
+101
+VQFN100
+VQFN100_KDX_MCH-M
+
+USB7206C/KDX 
+0
+101
+101
 Valve
 Valve_ECC-83-1
 Valve ECC-83-1 round pins

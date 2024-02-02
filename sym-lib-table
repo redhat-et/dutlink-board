@@ -1,4 +1,6 @@
 (sym_lib_table
   (version 7)
   (lib (name "TUSBMUXES")(type "KiCad")(uri "${KIPRJMOD}/TUSBMUXES.kicad_sym")(options "")(descr ""))
+  (lib (name "USBHUBS")(type "KiCad")(uri "${KIPRJMOD}/USBHUBS.kicad_sym")(options "")(descr ""))
+  (lib (name "POWER")(type "KiCad")(uri "${KIPRJMOD}/POWER.kicad_sym")(options "")(descr ""))
 )
